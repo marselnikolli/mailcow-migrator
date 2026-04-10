@@ -50,8 +50,22 @@ const Dashboard: React.FC = () => {
     return () => clearInterval(interval)
   }, [])
 
+  const getStatusColor = (status: string) => {
+    switch (status) {
+      case 'running': return 'bg-blue-100 text-blue-800'
+      case 'completed': return 'bg-green-100 text-green-800'
+      case 'failed': return 'bg-red-100 text-red-800'
+      case 'pending': return 'bg-yellow-100 text-yellow-800'
+      default: return 'bg-gray-100 text-gray-800'
+    }
+  }
+
   if (loading) {
-    return <div className="flex justify-center items-center h-screen">Loading...</div>
+    return (
+      <div className="min-h-screen bg-gray-100 py-12 px-4 sm:px-6 lg:px-8 flex justify-center items-center">
+        <div className="text-gray-600">Loading...</div>
+      </div>
+    )
   }
 
   return (
@@ -70,7 +84,7 @@ const Dashboard: React.FC = () => {
                 <p className="text-gray-500 text-sm font-medium">Active Migrations</p>
                 <p className="text-3xl font-bold text-blue-600">{stats.active}</p>
               </div>
-              <div className="text-4xl text-blue-200">▶</div>
+              <div className="text-4xl">▶️</div>
             </div>
           </div>
 
@@ -80,7 +94,7 @@ const Dashboard: React.FC = () => {
                 <p className="text-gray-500 text-sm font-medium">Failed Jobs</p>
                 <p className="text-3xl font-bold text-red-600">{stats.failed}</p>
               </div>
-              <div className="text-4xl text-red-200">✕</div>
+              <div className="text-4xl">❌</div>
             </div>
           </div>
 
@@ -90,76 +104,70 @@ const Dashboard: React.FC = () => {
                 <p className="text-gray-500 text-sm font-medium">Completed</p>
                 <p className="text-3xl font-bold text-green-600">{stats.completed}</p>
               </div>
-              <div className="text-4xl text-green-200">✓</div>
+              <div className="text-4xl">✅</div>
             </div>
+          </div>
+        </div>
+
+        {/* Quick Action */}
+        <div className="bg-white rounded-lg shadow p-6 mb-8">
+          <h2 className="text-lg font-semibold text-gray-900 mb-4">Quick Actions</h2>
+          <div className="flex gap-4">
+            <Link
+              to="/jobs"
+              className="px-6 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 font-medium"
+            >
+              Create New Migration Job
+            </Link>
+            <Link
+              to="/domains"
+              className="px-6 py-2 bg-gray-600 text-white rounded-lg hover:bg-gray-700 font-medium"
+            >
+              Manage Domains
+            </Link>
           </div>
         </div>
 
         {/* Recent Jobs */}
         <div className="bg-white rounded-lg shadow">
-          <div className="px-6 py-4 border-b border-gray-200 flex justify-between items-center">
-            <h2 className="text-lg font-semibold text-gray-900">Recent Jobs</h2>
-            <Link to="/jobs" className="text-blue-600 hover:text-blue-800 text-sm font-medium">
-              View All →
-            </Link>
+          <div className="px-6 py-4 border-b border-gray-200">
+            <h2 className="text-lg font-semibold text-gray-900">Recent Migrations</h2>
           </div>
-          <div className="overflow-x-auto">
-            <table className="w-full">
-              <thead>
-                <tr className="border-b border-gray-200 bg-gray-50">
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-700 uppercase tracking-wider">
-                    Source Email
-                  </th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-700 uppercase tracking-wider">
-                    Target Email
-                  </th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-700 uppercase tracking-wider">
-                    Status
-                  </th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-700 uppercase tracking-wider">
-                    Progress
-                  </th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-700 uppercase tracking-wider">
-                    Created
-                  </th>
-                </tr>
-              </thead>
-              <tbody>
-                {recentJobs.map((job) => (
-                  <tr key={job.id} className="border-b border-gray-200 hover:bg-gray-50">
-                    <td className="px-6 py-4 text-sm text-gray-900">{job.source_email}</td>
-                    <td className="px-6 py-4 text-sm text-gray-900">{job.target_email}</td>
-                    <td className="px-6 py-4 text-sm">
-                      <span
-                        className={`px-3 py-1 rounded-full text-xs font-semibold ${
-                          job.status === 'completed'
-                            ? 'bg-green-100 text-green-800'
-                            : job.status === 'failed'
-                            ? 'bg-red-100 text-red-800'
-                            : job.status === 'running'
-                            ? 'bg-blue-100 text-blue-800'
-                            : 'bg-gray-100 text-gray-800'
-                        }`}
-                      >
-                        {job.status}
-                      </span>
-                    </td>
-                    <td className="px-6 py-4 text-sm">
-                      <div className="w-full bg-gray-200 rounded-full h-2">
-                        <div
-                          className="bg-blue-600 h-2 rounded-full"
-                          style={{ width: `${job.progress}%` }}
-                        ></div>
-                      </div>
-                    </td>
-                    <td className="px-6 py-4 text-sm text-gray-500">
-                      {new Date(job.created_at).toLocaleDateString()}
-                    </td>
+
+          {recentJobs.length === 0 ? (
+            <div className="px-6 py-12 text-center text-gray-500">
+              <p>No jobs yet. <Link to="/jobs" className="text-blue-600 hover:text-blue-700">Create one now!</Link></p>
+            </div>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full">
+                <thead>
+                  <tr className="border-b border-gray-200 bg-gray-50">
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-700 uppercase">Source</th>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-700 uppercase">Target</th>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-700 uppercase">Status</th>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-700 uppercase">Created</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+                </thead>
+                <tbody>
+                  {recentJobs.map((job) => (
+                    <tr key={job.id} className="border-b border-gray-200 hover:bg-gray-50">
+                      <td className="px-6 py-4 text-sm text-gray-900">{job.source_email}</td>
+                      <td className="px-6 py-4 text-sm text-gray-900">{job.target_email}</td>
+                      <td className="px-6 py-4 text-sm">
+                        <span className={`px-3 py-1 rounded-full text-xs font-medium ${getStatusColor(job.status)}`}>
+                          {job.status}
+                        </span>
+                      </td>
+                      <td className="px-6 py-4 text-sm text-gray-600">
+                        {new Date(job.created_at).toLocaleString()}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
         </div>
       </div>
     </div>

@@ -1,5 +1,5 @@
 import React, { useState } from 'react'
-import { useNavigate, Link } from 'react-router-dom'
+import { useNavigate } from 'react-router-dom'
 import { authApi } from '../api'
 
 const Login: React.FC = () => {
@@ -72,7 +72,7 @@ const Login: React.FC = () => {
     <div className="min-h-screen bg-gradient-to-br from-blue-600 to-blue-800 flex items-center justify-center px-4 sm:px-6 lg:px-8">
       <div className="bg-white rounded-lg shadow-xl p-8 max-w-md w-full">
         <div className="text-center mb-8">
-          <h1 className="text-3xl font-bold text-gray-900">mailcow-migrator</h1>
+          <h1 className="text-3xl font-bold text-gray-900">📧 mailcow-migrator</h1>
           <p className="text-gray-600 mt-2">Mail Migration as a Service</p>
         </div>
 
@@ -98,14 +98,14 @@ const Login: React.FC = () => {
               value={password}
               onChange={(e) => setPassword(e.target.value)}
               className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
-              placeholder="password"
+              placeholder="••••••••"
               required
             />
           </div>
 
           {isRegister && (
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Organization Name</label>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Tenant Name</label>
               <input
                 type="text"
                 value={tenantName}
@@ -134,41 +134,35 @@ const Login: React.FC = () => {
           <button
             type="submit"
             disabled={loading}
-            className="w-full bg-blue-600 text-white py-2 rounded-lg font-semibold hover:bg-blue-700 disabled:opacity-50"
+            className="w-full bg-blue-600 text-white py-2 rounded-lg hover:bg-blue-700 font-medium disabled:opacity-50 disabled:cursor-not-allowed"
           >
-            {loading ? 'Loading...' : isRegister ? 'Create Account' : 'Sign In'}
+            {loading ? 'Loading...' : isRegister ? 'Create Account' : 'Login'}
           </button>
         </form>
 
-        <div className="mt-6 text-center text-sm">
-          {isRegister ? (
-            <>
-              <p className="text-gray-600">
-                Already have an account?{' '}
-                <button
-                  type="button"
-                  onClick={() => setIsRegister(false)}
-                  className="text-blue-600 hover:text-blue-800 font-semibold"
-                >
-                  Sign in
-                </button>
-              </p>
-            </>
-          ) : (
-            <>
-              <p className="text-gray-600">
-                Don't have an account?{' '}
-                <button
-                  type="button"
-                  onClick={() => setIsRegister(true)}
-                  className="text-blue-600 hover:text-blue-800 font-semibold"
-                >
-                  Create one
-                </button>
-              </p>
-            </>
-          )}
+        <div className="mt-6 text-center">
+          <p className="text-gray-600">
+            {isRegister ? 'Already have an account?' : "Don't have an account?"}
+            <button
+              type="button"
+              onClick={() => setIsRegister(!isRegister)}
+              className="text-blue-600 hover:text-blue-700 font-medium ml-2"
+            >
+              {isRegister ? 'Login' : 'Register'}
+            </button>
+          </p>
         </div>
+
+        {isRegister && (
+          <div className="mt-6 p-4 bg-blue-50 border border-blue-200 rounded-lg text-sm text-blue-800">
+            <p className="font-medium mb-2">✓ Creating a new account:</p>
+            <ul className="list-disc list-inside space-y-1 text-xs">
+              <li>Creates a new tenant (organization)</li>
+              <li>You become the tenant owner</li>
+              <li>After registration, save your tenant ID for future logins</li>
+            </ul>
+          </div>
+        )}
       </div>
     </div>
   )

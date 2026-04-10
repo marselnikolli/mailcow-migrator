@@ -15,8 +15,8 @@ class Settings:
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
     
     # Source IMAP settings
-    SOURCE_IMAP_HOST: str = os.getenv("SOURCE_IMAP_HOST", "")
-    SOURCE_IMAP_PORT: int = int(os.getenv("SOURCE_IMAP_PORT", "993"))
+    SOURCE_IMAP_HOST: str = os.getenv("SOURCE_IMAP_HOST", "imap.gmail.com")
+    SOURCE_IMAP_PORT: int = int(os.getenv("SOURCE_IMAP_PORT", "") or "993")
     
     # Database
     DATABASE_URL: str = os.getenv("DATABASE_URL", "sqlite:///./mailcow.db")
