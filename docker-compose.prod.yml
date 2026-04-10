@@ -1,0 +1,75 @@
+version: '3.8'
+
+services:
+  backend:
+    build:
+      context: ./backend
+    ports:
+      - "8000:8000"
+    environment:
+      - MAILCOW_URL=${MAILCOW_URL}
+      - MAILCOW_API_KEY=${MAILCOW_API_KEY}
+      - REDIS_URL=redis://redis:6379
+      - SECRET_KEY=${SECRET_KEY}
+      - SOURCE_IMAP_HOST=${SOURCE_IMAP_HOST}
+      - SOURCE_IMAP_PORT=${SOURCE_IMAP_PORT}
+      - DEBUG=False
+    depends_on:
+      - redis
+    networks:
+      - mailcow-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  worker:
+    build:
+      context: ./backend
+    environment:
+      - MAILCOW_URL=${MAILCOW_URL}
+      - MAILCOW_API_KEY=${MAILCOW_API_KEY}
+      - REDIS_URL=redis://redis:6379
+      - SECRET_KEY=${SECRET_KEY}
+      - SOURCE_IMAP_HOST=${SOURCE_IMAP_HOST}
+      - SOURCE_IMAP_PORT=${SOURCE_IMAP_PORT}
+      - WORKER_MODE=true
+    depends_on:
+      - redis
+    networks:
+      - mailcow-network
+    restart: unless-stopped
+    command: python -m app.core.worker
+
+  frontend:
+    build:
+      context: ./frontend
+    ports:
+      - "3000:80"
+    environment:
+      - VITE_API_URL=http://backend:8000
+    depends_on:
+      - backend
+    networks:
+      - mailcow-network
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    networks:
+      - mailcow-network
+    restart: unless-stopped
+    volumes:
+      - redis-data:/data
+
+networks:
+  mailcow-network:
+    driver: bridge
+
+volumes:
+  redis-data:

@@ -1,0 +1,46 @@
+version: '3.8'
+
+services:
+  backend:
+    build:
+      context: ./backend
+    ports:
+      - "8000:8000"
+    environment:
+      - MAILCOW_URL=${MAILCOW_URL}
+      - MAILCOW_API_KEY=${MAILCOW_API_KEY}
+      - REDIS_URL=redis://redis:6379
+      - SECRET_KEY=${SECRET_KEY}
+      - SOURCE_IMAP_HOST=${SOURCE_IMAP_HOST}
+      - SOURCE_IMAP_PORT=${SOURCE_IMAP_PORT}
+    depends_on:
+      - redis
+    networks:
+      - mailcow-network
+    volumes:
+      - ./backend:/app
+
+  frontend:
+    build:
+      context: ./frontend
+    ports:
+      - "3000:3000"
+    environment:
+      - VITE_API_URL=http://localhost:8000
+    depends_on:
+      - backend
+    networks:
+      - mailcow-network
+    volumes:
+      - ./frontend:/app
+
+  redis:
+    image: redis:latest
+    ports:
+      - "6379:6379"
+    networks:
+      - mailcow-network
+
+networks:
+  mailcow-network:
+    driver: bridge
