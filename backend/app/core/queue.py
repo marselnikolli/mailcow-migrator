@@ -53,6 +53,31 @@ class RedisQueue:
     def get_queue_size(self) -> int:
         """Get number of jobs in queue."""
         return self.redis_client.llen(self.queue_key)
+
+    def remove_job(self, job_id: int) -> bool:
+        """Remove a not-yet-started job from the queue (e.g. on cancel/delete/edit).
+
+        Returns True if a matching entry was found and removed, False if the
+        job wasn't in the queue anymore (already popped by a worker, or never
+        queued)."""
+        removed = False
+        for job_json in self.redis_client.lrange(self.queue_key, 0, -1):
+            job = json.loads(job_json)
+            if job.get("id") == job_id:
+                self.redis_client.lrem(self.queue_key, 1, job_json)
+                removed = True
+        return removed
+
+    def request_cancel(self, job_id: int) -> None:
+        """Flag a running job for cancellation; the worker checks this
+        periodically and stops the transfer if it's set."""
+        self.redis_client.setex(f"mailcow:cancel:{job_id}", 3600, "1")
+
+    def is_cancel_requested(self, job_id: int) -> bool:
+        return bool(self.redis_client.get(f"mailcow:cancel:{job_id}"))
+
+    def clear_cancel(self, job_id: int) -> None:
+        self.redis_client.delete(f"mailcow:cancel:{job_id}")
     
     def set_job_log(self, job_id: str, log: str) -> None:
         """Store job log in Redis."""

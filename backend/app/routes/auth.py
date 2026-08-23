@@ -1,7 +1,8 @@
-from fastapi import APIRouter, HTTPException, Depends, status
+from fastapi import APIRouter, HTTPException, Depends, Request, status
 from pydantic import BaseModel, EmailStr
 from app.auth import AuthService
 from app.db import get_db, dict_from_row
+from app.deps.roles import get_current_user
 from app.models import UserRole
 
 router = APIRouter()
@@ -83,17 +84,12 @@ async def login(request: LoginRequest):
     token_response = AuthService.create_token_response(user["id"], user["tenant_id"], user["role"])
     return token_response
 
-@router.get("/me", response_model=UserResponse)
-async def get_current_user(token: str):
-    """Get current user info from token."""
-    payload = AuthService.decode_token(token)
-    if not payload:
-        raise HTTPException(status_code=401, detail="Invalid token")
-    
-    user_id = payload.get("sub")
-    tenant_id = payload.get("tenant_id")
-    role = payload.get("role")
-    
+@router.get("/me", response_model=UserResponse, dependencies=[Depends(get_current_user)])
+async def me(request: Request):
+    """Get current user info from the verified Authorization header."""
+    user_id = request.state.user_id
+    tenant_id = request.state.tenant_id
+
     conn = get_db()
     cursor = conn.cursor()
     cursor.execute("SELECT * FROM users WHERE id = ? AND tenant_id = ?", (user_id, tenant_id))

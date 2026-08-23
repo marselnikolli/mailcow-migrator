@@ -1,7 +1,43 @@
 import React, { useEffect, useState } from 'react'
 import { jobsApi, JobCreatePayload, ImportedAccount } from '../api'
+import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
+import { Checkbox } from '@/components/ui/checkbox'
+import { Badge } from '@/components/ui/badge'
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '@/components/ui/table'
+import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import { Separator } from '@/components/ui/separator'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu'
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog'
+import { Upload, Plus, Trash2, RefreshCw, Play, MoreHorizontal, Pencil, Ban } from 'lucide-react'
 import LiveLogs from '../components/LiveLogs'
 import ImportModal from '../components/ImportModal'
+import EditJobDialog from '../components/EditJobDialog'
+import { JobStatusBadge } from '@/lib/job-status'
 
 interface Job {
   id: number
@@ -17,11 +53,16 @@ interface Job {
   dry_run?: boolean
 }
 
+type ConfirmKind = 'cancel' | 'delete'
+
 interface AccountRow {
   key: number
   source_email: string
   source_password: string
   target_email: string
+  target_password: string
+  target_email_touched: boolean
+  target_password_touched: boolean
 }
 
 let nextAccountKey = 1
@@ -36,6 +77,10 @@ const Jobs: React.FC = () => {
   const [createError, setCreateError] = useState('')
   const [createSuccess, setCreateSuccess] = useState('')
   const [creating, setCreating] = useState(false)
+  const [editingJobId, setEditingJobId] = useState<number | null>(null)
+  const [confirmJob, setConfirmJob] = useState<{ job: Job; kind: ConfirmKind } | null>(null)
+  const [actionError, setActionError] = useState('')
+  const [actionPending, setActionPending] = useState(false)
 
   // Source server config
   const [sourceHost, setSourceHost] = useState('imap.gmail.com')
@@ -43,17 +88,24 @@ const Jobs: React.FC = () => {
   const [sourceSsl, setSourceSsl] = useState(true)
 
   // Accounts (source + target)
-  const [accounts, setAccounts] = useState<AccountRow[]>([{ key: 0, source_email: '', source_password: '', target_email: '' }])
+  const newEmptyAccount = (): AccountRow => ({
+    key: nextAccountKey++,
+    source_email: '',
+    source_password: '',
+    target_email: '',
+    target_password: '',
+    target_email_touched: false,
+    target_password_touched: false,
+  })
+  const [accounts, setAccounts] = useState<AccountRow[]>([newEmptyAccount()])
 
-  // Target server config
+  // Target server config (mailcow by default -> creates mailbox like the source)
   const [targetType, setTargetType] = useState<'imap' | 'mailcow'>('mailcow')
   const [targetHost, setTargetHost] = useState('localhost')
   const [targetPort, setTargetPort] = useState(993)
   const [targetSsl, setTargetSsl] = useState(true)
   const [mailcowUrl, setMailcowUrl] = useState('')
   const [mailcowApiKey, setMailcowApiKey] = useState('')
-  const [targetDomain, setTargetDomain] = useState('')
-  const [targetPassword, setTargetPassword] = useState('')
   const [dryRun, setDryRun] = useState(false)
 
   const fetchJobs = async () => {
@@ -75,26 +127,47 @@ const Jobs: React.FC = () => {
   }, [filterStatus])
 
   const handleAddAccount = () => {
-    setAccounts((prev) => [...prev, { key: nextAccountKey++, source_email: '', source_password: '', target_email: '' }])
+    setAccounts((prev) => [...prev, newEmptyAccount()])
   }
 
   const handleRemoveAccount = (key: number) => {
     setAccounts((prev) => {
       const next = prev.filter((a) => a.key !== key)
-      return next.length === 0 ? [{ key: nextAccountKey++, source_email: '', source_password: '', target_email: '' }] : next
+      return next.length === 0 ? [newEmptyAccount()] : next
     })
   }
 
+  // Mirror source -> target by default: same email and same password.
   const handleUpdateAccount = (key: number, field: keyof AccountRow, value: string) => {
-    setAccounts((prev) => prev.map((a) => (a.key === key ? { ...a, [field]: value } : a)))
+    setAccounts((prev) =>
+      prev.map((a) => {
+        if (a.key !== key) return a
+        const next = { ...a, [field]: value }
+        if (field === 'source_email' && !a.target_email_touched) {
+          next.target_email = value
+        }
+        if (field === 'source_password' && !a.target_password_touched) {
+          next.target_password = value
+        }
+        return next
+      })
+    )
   }
 
+  const handleMarkTargetTouched = (key: number, field: 'target_email' | 'target_password') => {
+    setAccounts((prev) => prev.map((a) => (a.key === key ? { ...a, [field + '_touched']: true } : a)))
+  }
+
+  // Imported accounts mirror to the same email/password by default.
   const handleImport = (imported: ImportedAccount[]) => {
     const rows: AccountRow[] = imported.map((acc) => ({
       key: nextAccountKey++,
       source_email: acc.email,
       source_password: acc.password,
-      target_email: targetDomain ? `${acc.email.split('@')[0]}@${targetDomain}` : '',
+      target_email: acc.email,
+      target_password: acc.password,
+      target_email_touched: false,
+      target_password_touched: false,
     }))
     setAccounts((prev) => {
       const base = prev.length === 1 && !prev[0].source_email ? [] : prev
@@ -103,7 +176,8 @@ const Jobs: React.FC = () => {
   }
 
   const buildJobPayload = (account: AccountRow): JobCreatePayload => {
-    const targetEmail = account.target_email.trim() || (targetDomain ? `${account.source_email.split('@')[0]}@${targetDomain}` : account.source_email)
+    const targetEmail = account.target_email.trim() || account.source_email.trim()
+    const targetPassword = account.target_password || account.source_password
     return {
       source_email: account.source_email.trim(),
       target_email: targetEmail,
@@ -142,12 +216,6 @@ const Jobs: React.FC = () => {
         return
       }
 
-      if (!targetPassword) {
-        setCreateError('Please set a target mailbox password')
-        setCreating(false)
-        return
-      }
-
       const payloads = validAccounts.map(buildJobPayload)
 
       if (payloads.length === 1) {
@@ -155,15 +223,19 @@ const Jobs: React.FC = () => {
         setCreateSuccess(`Job created for ${payloads[0].source_email}${dryRun ? ' (dry run)' : ''}!`)
       } else {
         const response = await jobsApi.bulkCreateJobs(payloads)
-        setCreateSuccess(`${response.data.total} jobs created${dryRun ? ' (dry run)' : ''}!`)
+        const failedAccounts: { source_email: string; error: string }[] = response.data.failed || []
+        setCreateSuccess(`${response.data.total} of ${payloads.length} jobs created${dryRun ? ' (dry run)' : ''}!`)
+        if (failedAccounts.length > 0) {
+          setCreateError(
+            `${failedAccounts.length} account${failedAccounts.length > 1 ? 's' : ''} skipped: ` +
+              failedAccounts.map((f) => `${f.source_email} (${f.error})`).join('; ')
+          )
+        }
       }
 
-      // Reset form
-      setAccounts([{ key: nextAccountKey++, source_email: '', source_password: '', target_email: '' }])
-      setTargetPassword('')
+      setAccounts([newEmptyAccount()])
       setShowCreateForm(false)
 
-      // Refresh jobs
       setTimeout(fetchJobs, 1000)
     } catch (error: any) {
       setCreateError(error.response?.data?.detail || 'Failed to create job')
@@ -182,77 +254,88 @@ const Jobs: React.FC = () => {
     }
   }
 
-  const getStatusColor = (status: string) => {
-    switch (status) {
-      case 'running': return 'bg-blue-100 text-blue-800'
-      case 'completed': return 'bg-green-100 text-green-800'
-      case 'failed': return 'bg-red-100 text-red-800'
-      case 'pending': return 'bg-yellow-100 text-yellow-800'
-      default: return 'bg-gray-100 text-gray-800'
+  const handleConfirmAction = async () => {
+    if (!confirmJob) return
+    setActionPending(true)
+    setActionError('')
+    try {
+      if (confirmJob.kind === 'cancel') {
+        await jobsApi.cancelJob(confirmJob.job.id)
+      } else {
+        await jobsApi.deleteJob(confirmJob.job.id)
+      }
+      setConfirmJob(null)
+      fetchJobs()
+    } catch (error: any) {
+      setActionError(error.response?.data?.detail || `Failed to ${confirmJob.kind} job`)
+    } finally {
+      setActionPending(false)
     }
   }
 
-  const getStatusIcon = (status: string) => {
-    switch (status) {
-      case 'running': return '⏳'
-      case 'completed': return '✅'
-      case 'failed': return '❌'
-      case 'pending': return '⏳'
-      default: return '❓'
-    }
-  }
-
-  const inputCls = "w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
-  const labelCls = "block text-sm font-medium text-gray-700 mb-1"
+  const inputCls = "w-full"
+  const labelCls = "block text-sm font-medium text-muted-foreground mb-1"
 
   if (loading) {
-    return (
-      <div className="min-h-screen bg-gray-100 py-12 px-4 sm:px-6 lg:px-8 flex justify-center items-center">
-        <div className="text-gray-600">Loading...</div>
-      </div>
-    )
+    return <div className="flex items-center justify-center py-24 text-muted-foreground">Loading...</div>
   }
 
   return (
-    <div className="min-h-screen bg-gray-100 py-12 px-4 sm:px-6 lg:px-8">
-      <div className="max-w-7xl mx-auto">
-        <div className="mb-8 flex justify-between items-start">
-          <div>
-            <h1 className="text-3xl font-bold text-gray-900">Migration Jobs</h1>
-            <p className="text-gray-600">Monitor and manage mail migrations</p>
-          </div>
-          <button
-            onClick={() => setShowCreateForm(!showCreateForm)}
-            className="px-6 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 font-medium"
-          >
-            {showCreateForm ? 'Cancel' : '+ Create Job'}
-          </button>
+    <div className="space-y-6">
+      <div className="flex items-center justify-between">
+        <div>
+          <h1 className="text-3xl font-bold tracking-tight">Migration Jobs</h1>
+          <p className="text-muted-foreground">Monitor and manage mail migrations</p>
         </div>
+        <Button onClick={() => setShowCreateForm(!showCreateForm)}>
+          {showCreateForm ? 'Cancel' : (
+            <>
+              <Plus className="mr-2 h-4 w-4" />
+              Create Job
+            </>
+          )}
+        </Button>
+      </div>
 
-        {showImportModal && (
-          <ImportModal onClose={() => setShowImportModal(false)} onImport={handleImport} />
-        )}
+      {actionError && (
+        <div className="rounded-lg border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">
+          {actionError}
+        </div>
+      )}
 
-        {/* Create Job Form */}
-        {showCreateForm && (
-          <div className="bg-white rounded-lg shadow p-6 mb-8">
-            <h2 className="text-xl font-semibold text-gray-900 mb-6">Create New Migration Job</h2>
+      {showImportModal && (
+        <ImportModal onClose={() => setShowImportModal(false)} onImport={handleImport} />
+      )}
 
+      {showCreateForm && (
+        <Card>
+          <CardHeader>
+            <CardTitle>Create New Migration Job</CardTitle>
+            <CardDescription>
+              New mailboxes are proposed with the same address and password as the source, and are
+              created on the destination Mailcow server automatically.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
             {createError && (
-              <div className="mb-4 p-4 bg-red-100 text-red-800 rounded-lg text-sm">{createError}</div>
+              <div className="mb-4 rounded-lg border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">
+                {createError}
+              </div>
             )}
             {createSuccess && (
-              <div className="mb-4 p-4 bg-green-100 text-green-800 rounded-lg text-sm">{createSuccess}</div>
+              <div className="mb-4 rounded-lg border border-success/30 bg-success/10 px-4 py-3 text-sm text-success dark:text-success">
+                {createSuccess}
+              </div>
             )}
 
             <form onSubmit={handleCreateJob} className="space-y-6">
               {/* Source Server Config */}
-              <div className="border-b pb-6">
-                <h3 className="text-lg font-medium text-gray-900 mb-4">Source Server</h3>
-                <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+              <div>
+                <h3 className="text-lg font-semibold">Source Server</h3>
+                <div className="mt-4 grid grid-cols-1 gap-4 md:grid-cols-4">
                   <div className="md:col-span-2">
                     <label className={labelCls}>IMAP Host</label>
-                    <input
+                    <Input
                       type="text"
                       value={sourceHost}
                       onChange={(e) => setSourceHost(e.target.value)}
@@ -263,7 +346,7 @@ const Jobs: React.FC = () => {
                   </div>
                   <div>
                     <label className={labelCls}>Port</label>
-                    <input
+                    <Input
                       type="number"
                       value={sourcePort}
                       onChange={(e) => setSourcePort(Number(e.target.value))}
@@ -273,7 +356,7 @@ const Jobs: React.FC = () => {
                   </div>
                   <div>
                     <label className={labelCls}>SSL</label>
-                    <select value={sourceSsl ? 'true' : 'false'} onChange={(e) => setSourceSsl(e.target.value === 'true')} className={inputCls}>
+                    <select value={sourceSsl ? 'true' : 'false'} onChange={(e) => setSourceSsl(e.target.value === 'true')} className="w-full rounded-md border border-input bg-transparent px-3 py-2 text-sm">
                       <option value="true">SSL (recommended)</option>
                       <option value="false">No SSL</option>
                     </select>
@@ -281,46 +364,43 @@ const Jobs: React.FC = () => {
                 </div>
               </div>
 
+              <Separator />
+
               {/* Source Accounts */}
-              <div className="border-b pb-6">
-                <div className="flex justify-between items-center mb-4">
-                  <h3 className="text-lg font-medium text-gray-900">Source Accounts</h3>
+              <div>
+                <div className="flex items-center justify-between">
+                  <h3 className="text-lg font-semibold">Source Accounts</h3>
                   <div className="flex gap-2">
-                    <button
-                      type="button"
-                      onClick={() => setShowImportModal(true)}
-                      className="px-4 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 text-sm font-medium"
-                    >
-                      📂 Import from File
-                    </button>
-                    <button
-                      type="button"
-                      onClick={handleAddAccount}
-                      className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 text-sm font-medium"
-                    >
-                      + Add Account
-                    </button>
+                    <Button type="button" variant="outline" onClick={() => setShowImportModal(true)}>
+                      <Upload className="mr-2 h-4 w-4" />
+                      Import from File
+                    </Button>
+                    <Button type="button" variant="outline" onClick={handleAddAccount}>
+                      <Plus className="mr-2 h-4 w-4" />
+                      Add Account
+                    </Button>
                   </div>
                 </div>
 
                 {accounts.map((account, index) => (
-                  <div key={account.key} className="mb-4 p-4 bg-gray-50 rounded-lg">
-                    <div className="flex justify-between items-center mb-3">
-                      <p className="text-sm font-medium text-gray-700">Account {index + 1}</p>
+                  <div key={account.key} className="mt-4 rounded-lg border bg-muted/40 p-4">
+                    <div className="mb-3 flex items-center justify-between">
+                      <p className="text-sm font-medium">Account {index + 1}</p>
                       {accounts.length > 1 && (
-                        <button
+                        <Button
                           type="button"
+                          variant="ghost"
+                          size="sm"
                           onClick={() => handleRemoveAccount(account.key)}
-                          className="text-red-500 hover:text-red-700 text-sm"
                         >
-                          Remove
-                        </button>
+                          <Trash2 className="h-4 w-4 text-destructive" />
+                        </Button>
                       )}
                     </div>
-                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                    <div className="grid grid-cols-1 gap-4 md:grid-cols-4">
                       <div>
                         <label className={labelCls}>Source Email</label>
-                        <input
+                        <Input
                           type="email"
                           value={account.source_email}
                           onChange={(e) => handleUpdateAccount(account.key, 'source_email', e.target.value)}
@@ -331,7 +411,7 @@ const Jobs: React.FC = () => {
                       </div>
                       <div>
                         <label className={labelCls}>Source Password</label>
-                        <input
+                        <Input
                           type="password"
                           value={account.source_password}
                           onChange={(e) => handleUpdateAccount(account.key, 'source_password', e.target.value)}
@@ -341,52 +421,57 @@ const Jobs: React.FC = () => {
                         />
                       </div>
                       <div>
-                        <label className={labelCls}>Target Email (optional)</label>
-                        <input
+                        <label className={labelCls}>New Mailbox Email</label>
+                        <Input
                           type="email"
                           value={account.target_email}
                           onChange={(e) => handleUpdateAccount(account.key, 'target_email', e.target.value)}
+                          onFocus={() => handleMarkTargetTouched(account.key, 'target_email')}
                           className={inputCls}
-                          placeholder="auto from domain"
+                          placeholder="same as source"
+                        />
+                      </div>
+                      <div>
+                        <label className={labelCls}>New Mailbox Password</label>
+                        <Input
+                          type="password"
+                          value={account.target_password}
+                          onChange={(e) => handleUpdateAccount(account.key, 'target_password', e.target.value)}
+                          onFocus={() => handleMarkTargetTouched(account.key, 'target_password')}
+                          className={inputCls}
+                          placeholder="same as source"
                         />
                       </div>
                     </div>
                   </div>
                 ))}
-                <p className="text-xs text-gray-500">
-                  Tip: leave Target Email blank to auto-generate from the source local part and the target domain below.
+                <p className="mt-2 text-xs text-muted-foreground">
+                  By default the new mailbox keeps the source address and password. Edit the fields
+                  to override.
                 </p>
               </div>
 
-              {/* Target Server Config */}
-              <div className="border-b pb-6">
-                <h3 className="text-lg font-medium text-gray-900 mb-4">Target Server</h3>
+              <Separator />
 
-                <div className="mb-4">
+              {/* Target Server Config */}
+              <div>
+                <h3 className="text-lg font-semibold">Destination Server</h3>
+
+                <div className="mt-4 mb-4">
                   <label className={labelCls}>Destination Type</label>
-                  <div className="flex gap-3">
-                    <button
-                      type="button"
-                      onClick={() => setTargetType('mailcow')}
-                      className={`px-4 py-2 rounded-lg font-medium ${targetType === 'mailcow' ? 'bg-blue-600 text-white' : 'bg-white text-gray-700 border border-gray-300 hover:bg-gray-50'}`}
-                    >
-                      Mailcow (API)
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setTargetType('imap')}
-                      className={`px-4 py-2 rounded-lg font-medium ${targetType === 'imap' ? 'bg-blue-600 text-white' : 'bg-white text-gray-700 border border-gray-300 hover:bg-gray-50'}`}
-                    >
-                      Generic IMAP Server
-                    </button>
-                  </div>
+                  <Tabs value={targetType} onValueChange={(v) => setTargetType(v as 'imap' | 'mailcow')}>
+                    <TabsList>
+                      <TabsTrigger value="mailcow">Mailcow (API)</TabsTrigger>
+                      <TabsTrigger value="imap">Generic IMAP Server</TabsTrigger>
+                    </TabsList>
+                  </Tabs>
                 </div>
 
                 {targetType === 'mailcow' ? (
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
                     <div>
                       <label className={labelCls}>Mailcow URL</label>
-                      <input
+                      <Input
                         type="text"
                         value={mailcowUrl}
                         onChange={(e) => setMailcowUrl(e.target.value)}
@@ -397,7 +482,7 @@ const Jobs: React.FC = () => {
                     </div>
                     <div>
                       <label className={labelCls}>Mailcow API Key</label>
-                      <input
+                      <Input
                         type="password"
                         value={mailcowApiKey}
                         onChange={(e) => setMailcowApiKey(e.target.value)}
@@ -405,16 +490,13 @@ const Jobs: React.FC = () => {
                         placeholder="Your mailcow API key"
                         required
                       />
-                      <p className="text-xs text-gray-500 mt-1">
-                        Mailboxes and domains will be created automatically via the Mailcow API.
-                      </p>
                     </div>
                   </div>
                 ) : (
-                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                  <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
                     <div>
                       <label className={labelCls}>IMAP Host</label>
-                      <input
+                      <Input
                         type="text"
                         value={targetHost}
                         onChange={(e) => setTargetHost(e.target.value)}
@@ -425,7 +507,7 @@ const Jobs: React.FC = () => {
                     </div>
                     <div>
                       <label className={labelCls}>Port</label>
-                      <input
+                      <Input
                         type="number"
                         value={targetPort}
                         onChange={(e) => setTargetPort(Number(e.target.value))}
@@ -435,166 +517,189 @@ const Jobs: React.FC = () => {
                     </div>
                     <div>
                       <label className={labelCls}>SSL</label>
-                      <select value={targetSsl ? 'true' : 'false'} onChange={(e) => setTargetSsl(e.target.value === 'true')} className={inputCls}>
+                      <select value={targetSsl ? 'true' : 'false'} onChange={(e) => setTargetSsl(e.target.value === 'true')} className="w-full rounded-md border border-input bg-transparent px-3 py-2 text-sm">
                         <option value="true">SSL (recommended)</option>
                         <option value="false">No SSL</option>
                       </select>
                     </div>
                   </div>
                 )}
-
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-4">
-                  <div>
-                    <label className={labelCls}>Target Domain</label>
-                    <input
-                      type="text"
-                      value={targetDomain}
-                      onChange={(e) => setTargetDomain(e.target.value)}
-                      className={inputCls}
-                      placeholder="example.com"
-                    />
-                    <p className="text-xs text-gray-500 mt-1">
-                      Used to auto-build target emails (e.g. source@old.com → source@example.com).
-                    </p>
-                  </div>
-                  <div>
-                    <label className={labelCls}>Target Mailbox Password</label>
-                    <input
-                      type="password"
-                      value={targetPassword}
-                      onChange={(e) => setTargetPassword(e.target.value)}
-                      className={inputCls}
-                      placeholder="New password for migrated mailboxes"
-                      required
-                    />
-                  </div>
-                </div>
               </div>
 
+              <Separator />
+
               {/* Options */}
-              <div className="flex flex-wrap items-center gap-6">
-                <label className="flex items-center gap-2 cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={dryRun}
-                    onChange={(e) => setDryRun(e.target.checked)}
-                    className="rounded"
-                  />
-                  <span className="text-sm font-medium text-gray-700">
-                    Dry run (test without transferring any data)
-                  </span>
-                </label>
+              <div className="flex items-center gap-2">
+                <Checkbox id="dryRun" checked={dryRun} onCheckedChange={(v) => setDryRun(!!v)} />
+                <Label htmlFor="dryRun" className="cursor-pointer">
+                  Dry run (test without transferring any data)
+                </Label>
               </div>
 
               <div className="flex gap-3">
-                <button
-                  type="submit"
-                  disabled={creating}
-                  className="px-6 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 font-medium disabled:opacity-50 disabled:cursor-not-allowed"
-                >
+                <Button type="submit" disabled={creating}>
+                  <Play className="mr-2 h-4 w-4" />
                   {creating ? 'Creating...' : `Create ${accounts.filter((a) => a.source_email.trim() && a.source_password).length > 1 ? 'Jobs' : 'Job'}`}
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setShowCreateForm(false)}
-                  className="px-6 py-2 bg-gray-300 text-gray-800 rounded-lg hover:bg-gray-400 font-medium"
-                >
+                </Button>
+                <Button type="button" variant="outline" onClick={() => setShowCreateForm(false)}>
                   Cancel
-                </button>
+                </Button>
               </div>
             </form>
-          </div>
-        )}
+          </CardContent>
+        </Card>
+      )}
 
-        {/* Filter */}
-        <div className="mb-6 flex gap-2 flex-wrap">
-          {['all', 'pending', 'running', 'completed', 'failed'].map((status) => (
-            <button
-              key={status}
-              onClick={() => setFilterStatus(status)}
-              className={`px-4 py-2 rounded-lg font-medium ${
-                filterStatus === status
-                  ? 'bg-blue-600 text-white'
-                  : 'bg-white text-gray-700 border border-gray-300 hover:bg-gray-50'
-              }`}
-            >
+      {/* Filter */}
+      <Tabs value={filterStatus} onValueChange={setFilterStatus}>
+        <TabsList>
+          {['all', 'pending', 'running', 'completed', 'failed', 'cancelled'].map((status) => (
+            <TabsTrigger key={status} value={status}>
               {status.charAt(0).toUpperCase() + status.slice(1)}
-            </button>
+            </TabsTrigger>
           ))}
-        </div>
+        </TabsList>
+      </Tabs>
 
-        {/* Jobs List */}
-        <div className="bg-white rounded-lg shadow overflow-hidden">
+      {/* Jobs List */}
+      <Card>
+        <CardContent className="p-0">
           {jobs.length === 0 ? (
-            <div className="px-6 py-12 text-center text-gray-500">
-              <p>No jobs found. <button onClick={() => setShowCreateForm(true)} className="text-blue-600 hover:text-blue-700">Create one now!</button></p>
+            <div className="px-6 py-12 text-center text-muted-foreground">
+              <p>No jobs found.</p>
+              <Button variant="link" onClick={() => setShowCreateForm(true)} className="mt-1">
+                Create one now!
+              </Button>
             </div>
           ) : (
-            <div className="overflow-x-auto">
-              <table className="w-full">
-                <thead>
-                  <tr className="border-b border-gray-200 bg-gray-50">
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-700 uppercase">Source</th>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-700 uppercase">Target</th>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-700 uppercase">Server</th>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-700 uppercase">Status</th>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-700 uppercase">Created</th>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-700 uppercase">Actions</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {jobs.map((job) => (
-                    <React.Fragment key={job.id}>
-                      <tr className="border-b border-gray-200 hover:bg-gray-50 cursor-pointer" onClick={() => setSelectedJobId(selectedJobId === job.id ? null : job.id)}>
-                        <td className="px-6 py-4 text-sm text-gray-900">{job.source_email}</td>
-                        <td className="px-6 py-4 text-sm text-gray-900">{job.target_email}</td>
-                        <td className="px-6 py-4 text-sm text-gray-600">
-                          {job.target_type === 'mailcow' ? 'Mailcow API' : (job.target_host || 'IMAP')}
-                          {job.dry_run && <span className="ml-2 px-2 py-0.5 rounded-full text-xs bg-purple-100 text-purple-800">DRY RUN</span>}
-                        </td>
-                        <td className="px-6 py-4 text-sm">
-                          <span className={`px-3 py-1 rounded-full text-xs font-medium ${getStatusColor(job.status)}`}>
-                            {getStatusIcon(job.status)} {job.status}
-                          </span>
-                        </td>
-                        <td className="px-6 py-4 text-sm text-gray-600">
-                          {new Date(job.created_at).toLocaleString()}
-                        </td>
-                        <td className="px-6 py-4 text-sm">
-                          {job.status === 'failed' && (
-                            <button
-                              onClick={(e) => {
-                                e.stopPropagation()
-                                handleRetryJob(job.id)
-                              }}
-                              className="text-blue-600 hover:text-blue-700 font-medium"
-                            >
-                              Retry
-                            </button>
-                          )}
-                        </td>
-                      </tr>
-                      {selectedJobId === job.id && (
-                        <tr className="bg-gray-50">
-                          <td colSpan={6} className="px-6 py-4">
-                            {job.error_message && (
-                              <div className="mb-4 p-4 bg-red-100 text-red-800 rounded-lg">
-                                <p className="font-semibold">Error:</p>
-                                <p>{job.error_message}</p>
-                              </div>
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Source</TableHead>
+                  <TableHead>Target</TableHead>
+                  <TableHead>Server</TableHead>
+                  <TableHead>Status</TableHead>
+                  <TableHead>Created</TableHead>
+                  <TableHead>Actions</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {jobs.map((job) => (
+                  <React.Fragment key={job.id}>
+                    <TableRow
+                      className="cursor-pointer"
+                      onClick={() => setSelectedJobId(selectedJobId === job.id ? null : job.id)}
+                    >
+                      <TableCell className="text-sm">{job.source_email}</TableCell>
+                      <TableCell className="text-sm">{job.target_email}</TableCell>
+                      <TableCell className="text-sm text-muted-foreground">
+                        {job.target_type === 'mailcow' ? 'Mailcow API' : (job.target_host || 'IMAP')}
+                        {job.dry_run && <Badge variant="outline" className="ml-2">DRY RUN</Badge>}
+                      </TableCell>
+                      <TableCell><JobStatusBadge status={job.status} /></TableCell>
+                      <TableCell className="text-sm text-muted-foreground">
+                        {new Date(job.created_at).toLocaleString()}
+                      </TableCell>
+                      <TableCell onClick={(e) => e.stopPropagation()}>
+                        <DropdownMenu>
+                          <DropdownMenuTrigger asChild>
+                            <Button variant="ghost" size="icon" className="h-8 w-8">
+                              <MoreHorizontal className="h-4 w-4" />
+                              <span className="sr-only">Job actions</span>
+                            </Button>
+                          </DropdownMenuTrigger>
+                          <DropdownMenuContent align="end">
+                            {(job.status === 'pending' || job.status === 'failed') && (
+                              <DropdownMenuItem onClick={() => setEditingJobId(job.id)}>
+                                <Pencil className="mr-2 h-4 w-4" />
+                                Edit
+                              </DropdownMenuItem>
                             )}
-                            <LiveLogs jobId={job.id} />
-                          </td>
-                        </tr>
-                      )}
-                    </React.Fragment>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+                            {job.status === 'failed' && (
+                              <DropdownMenuItem onClick={() => handleRetryJob(job.id)}>
+                                <RefreshCw className="mr-2 h-4 w-4" />
+                                Retry
+                              </DropdownMenuItem>
+                            )}
+                            {(job.status === 'pending' || job.status === 'running') && (
+                              <DropdownMenuItem onClick={() => setConfirmJob({ job, kind: 'cancel' })}>
+                                <Ban className="mr-2 h-4 w-4" />
+                                Cancel
+                              </DropdownMenuItem>
+                            )}
+                            {(job.status === 'pending' ||
+                              job.status === 'failed' ||
+                              job.status === 'completed' ||
+                              job.status === 'cancelled') && (
+                              <>
+                                <DropdownMenuSeparator />
+                                <DropdownMenuItem
+                                  onClick={() => setConfirmJob({ job, kind: 'delete' })}
+                                  className="text-destructive focus:text-destructive"
+                                >
+                                  <Trash2 className="mr-2 h-4 w-4" />
+                                  Delete
+                                </DropdownMenuItem>
+                              </>
+                            )}
+                          </DropdownMenuContent>
+                        </DropdownMenu>
+                      </TableCell>
+                    </TableRow>
+                    {selectedJobId === job.id && (
+                      <TableRow>
+                        <TableCell colSpan={6} className="bg-muted/40">
+                          {job.error_message && (
+                            <div className="mb-4 rounded-lg border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">
+                              <p className="font-semibold">Error:</p>
+                              <p>{job.error_message}</p>
+                            </div>
+                          )}
+                          <LiveLogs jobId={job.id} />
+                        </TableCell>
+                      </TableRow>
+                    )}
+                  </React.Fragment>
+                ))}
+              </TableBody>
+            </Table>
           )}
-        </div>
-      </div>
+        </CardContent>
+      </Card>
+
+      <EditJobDialog
+        jobId={editingJobId}
+        onOpenChange={(open) => !open && setEditingJobId(null)}
+        onSaved={fetchJobs}
+      />
+
+      <AlertDialog open={confirmJob !== null} onOpenChange={(open) => !open && setConfirmJob(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>
+              {confirmJob?.kind === 'delete' ? 'Delete this job?' : 'Cancel this job?'}
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              {confirmJob?.kind === 'delete'
+                ? <>This permanently removes the job for <strong>{confirmJob.job.source_email}</strong> and its logs. This can't be undone.</>
+                : <>This stops the migration for <strong>{confirmJob?.job.source_email}</strong> as soon as possible. Already-transferred mail is not rolled back.</>}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={actionPending}>Back</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={(e) => {
+                e.preventDefault()
+                handleConfirmAction()
+              }}
+              disabled={actionPending}
+              className={confirmJob?.kind === 'delete' ? 'bg-destructive text-destructive-foreground hover:bg-destructive/90' : undefined}
+            >
+              {actionPending ? 'Working...' : confirmJob?.kind === 'delete' ? 'Delete' : 'Cancel job'}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   )
 }

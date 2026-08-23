@@ -1,6 +1,8 @@
 import subprocess
 import logging
-from typing import Optional, Tuple
+from typing import Callable, Optional, Tuple
+
+CANCELLED = "CANCELLED"
 
 logger = logging.getLogger(__name__)
 
@@ -79,9 +81,14 @@ class ImapsyncWrapper:
                              target_password: str, on_log_callback=None, source_host: str = None,
                              source_port: int = 993, source_ssl: bool = True,
                              target_host: str = "localhost", target_port: int = 993,
-                             target_ssl: bool = True, dry_run: bool = False) -> Tuple[bool, str]:
+                             target_ssl: bool = True, dry_run: bool = False,
+                             should_cancel: Optional[Callable[[], bool]] = None) -> Tuple[bool, str]:
         """
         Run imapsync with logging callback for real-time output.
+
+        If `should_cancel` is provided, it's checked after each output line;
+        when it returns True the subprocess is killed and this returns
+        (False, CANCELLED) instead of treating it as a failure.
         """
         try:
             cmd = ImapsyncWrapper._build_cmd(
@@ -90,7 +97,7 @@ class ImapsyncWrapper:
                 target_host=target_host, target_port=target_port, target_ssl=target_ssl,
                 dry_run=dry_run
             )
-            
+
             output_lines = []
             process = subprocess.Popen(
                 cmd,
@@ -98,14 +105,19 @@ class ImapsyncWrapper:
                 stderr=subprocess.PIPE,
                 text=True
             )
-            
+
             # Read output line by line
             for line in process.stdout:
                 line = line.rstrip()
                 output_lines.append(line)
                 if on_log_callback:
                     on_log_callback(line)
-            
+                if should_cancel and should_cancel():
+                    process.kill()
+                    process.wait(timeout=10)
+                    logger.info(f"imapsync cancelled for {source_email} -> {target_email}")
+                    return False, CANCELLED
+
             process.wait(timeout=3600)
             
             if process.returncode == 0:

@@ -2,7 +2,7 @@ import time
 import logging
 from typing import Optional
 from app.core.queue import RedisQueue
-from app.core.imapsync import ImapsyncWrapper
+from app.core.imapsync import CANCELLED, ImapsyncWrapper
 from app.core.domains import DomainService
 from app.core.mailcow import MailcowClient
 from app.core.logger import StructuredLogger
@@ -11,11 +11,23 @@ from app.models import JobStatus
 
 logger = logging.getLogger(__name__)
 
+
+def _redact(text: str, secrets: list) -> str:
+    """Strip known secret values out of a string before it's stored or
+    streamed. imapsync tries to mask passwords in its own self-printed
+    command line, but that masking can fail (e.g. on passwords containing
+    regex-special characters) and leak the real value into its output -
+    don't rely on it."""
+    for secret in secrets:
+        if secret:
+            text = text.replace(secret, "[REDACTED]")
+    return text
+
+
 class MigrationWorker:
     def __init__(self):
         self.queue = RedisQueue()
         self.imapsync = ImapsyncWrapper()
-        self.domain_service = DomainService()
         self.job_logger = StructuredLogger()
         self.max_retries = 3
     
@@ -37,10 +49,17 @@ class MigrationWorker:
         mailcow_url = job.get("mailcow_url")
         mailcow_api_key = job.get("mailcow_api_key")
         dry_run = job.get("dry_run", False)
-        
+        secrets = [s for s in (source_password, target_password, mailcow_api_key) if s]
+
         try:
+            if self.queue.is_cancel_requested(job_id):
+                self.job_logger.log_info(job_id, "Cancelled before processing started")
+                self.queue.clear_cancel(job_id)
+                JobRepository.update_job_status(job_id, tenant_id, JobStatus.CANCELLED, progress=job.get("progress", 0))
+                return False
+
             self.job_logger.log_info(job_id, f"Starting migration for {source_email} -> {target_email}")
-            
+
             if dry_run:
                 self.job_logger.log_info(job_id, "DRY RUN mode: no data will be transferred, no mailboxes will be created")
             
@@ -56,15 +75,18 @@ class MigrationWorker:
                 
                 self.job_logger.log_info(job_id, f"Ensuring domain {target_domain} exists in Mailcow ({mailcow.base_url})")
                 if not dry_run:
-                    if not mailcow.check_domain_exists(target_domain):
-                        try:
-                            mailcow.create_domain(target_domain)
-                            self.job_logger.log_info(job_id, f"Created domain {target_domain} in Mailcow")
-                        except Exception as e:
-                            raise Exception(f"Failed to create domain in Mailcow: {str(e)}")
-                    else:
-                        self.job_logger.log_info(job_id, f"Domain {target_domain} already exists in Mailcow")
-                    
+                    # Normally already done synchronously when the job was
+                    # created/edited (see routes/jobs.py); this is the
+                    # fallback for jobs queued before that existed, and also
+                    # keeps the local domains table (shown on the Domains
+                    # page) in sync with what actually exists in Mailcow.
+                    try:
+                        DomainService(mailcow=mailcow).ensure_domain_exists(target_domain, tenant_id)
+                        self.job_logger.log_info(job_id, f"Domain {target_domain} ready in Mailcow")
+                    except Exception as e:
+                        raise Exception(f"Failed to prepare domain in Mailcow: {str(e)}")
+
+
                     self.job_logger.log_info(job_id, f"Creating mailbox {target_email} in Mailcow")
                     if not mailcow.check_mailbox_exists(target_email):
                         try:
@@ -84,6 +106,7 @@ class MigrationWorker:
             self.job_logger.log_info(job_id, "Starting IMAP sync")
             
             def on_log(line):
+                line = _redact(line, secrets)
                 self.job_logger.log_info(job_id, line)
                 self.queue.set_job_log(job_id, line)
             
@@ -99,9 +122,16 @@ class MigrationWorker:
                 target_host=target_host,
                 target_port=target_port,
                 target_ssl=target_ssl,
-                dry_run=dry_run
+                dry_run=dry_run,
+                should_cancel=lambda: self.queue.is_cancel_requested(job_id)
             )
-            
+
+            if output == CANCELLED:
+                self.job_logger.log_info(job_id, "Migration cancelled")
+                self.queue.clear_cancel(job_id)
+                JobRepository.update_job_status(job_id, tenant_id, JobStatus.CANCELLED, progress=job.get("progress", 0))
+                return False
+
             if success:
                 if dry_run:
                     self.job_logger.log_info(job_id, "Dry run completed successfully - no data was transferred")
@@ -111,11 +141,17 @@ class MigrationWorker:
                 return True
             else:
                 raise Exception(f"IMAP sync failed: {output}")
-        
+
         except Exception as e:
-            error_msg = str(e)
+            error_msg = _redact(str(e), secrets)
             self.job_logger.log_error(job_id, error_msg)
-            
+
+            if self.queue.is_cancel_requested(job_id):
+                self.job_logger.log_info(job_id, "Migration cancelled")
+                self.queue.clear_cancel(job_id)
+                JobRepository.update_job_status(job_id, tenant_id, JobStatus.CANCELLED, progress=job.get("progress", 0))
+                return False
+
             # Check retry count
             retry_count = job.get("retry_count", 0)
             if retry_count < self.max_retries:
@@ -125,7 +161,7 @@ class MigrationWorker:
             else:
                 self.job_logger.log_error(job_id, "Max retries exceeded, marking job as failed")
                 JobRepository.mark_job_failed(job_id, tenant_id, error_msg)
-            
+
             return False
     
     def start(self, poll_interval: int = 5):

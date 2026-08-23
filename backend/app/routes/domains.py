@@ -1,10 +1,11 @@
-from fastapi import APIRouter, Request, HTTPException
+from fastapi import APIRouter, Request, HTTPException, Depends
 from pydantic import BaseModel
 from app.core.domains import DomainService
 from app.db import get_db, dict_from_row
+from app.deps.roles import get_current_user
 from typing import List
 
-router = APIRouter()
+router = APIRouter(dependencies=[Depends(get_current_user)])
 domain_service = DomainService()
 
 class DomainCreateRequest(BaseModel):

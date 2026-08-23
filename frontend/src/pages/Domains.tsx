@@ -1,5 +1,18 @@
 import React, { useEffect, useState } from 'react'
 import { domainsApi } from '../api'
+import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
+import { Badge } from '@/components/ui/badge'
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '@/components/ui/table'
+import { CheckCircle2, CircleDashed } from 'lucide-react'
 
 interface Domain {
   id: number
@@ -57,97 +70,96 @@ const Domains: React.FC = () => {
   }
 
   if (loading) {
-    return (
-      <div className="min-h-screen bg-gray-100 py-12 px-4 sm:px-6 lg:px-8 flex justify-center items-center">
-        <div className="text-gray-600">Loading...</div>
-      </div>
-    )
+    return <div className="flex items-center justify-center py-24 text-muted-foreground">Loading...</div>
   }
 
   return (
-    <div className="min-h-screen bg-gray-100 py-12 px-4 sm:px-6 lg:px-8">
-      <div className="max-w-4xl mx-auto">
-        <div className="mb-8">
-          <h1 className="text-3xl font-bold text-gray-900">Domain Management</h1>
-          <p className="text-gray-600">Manage and monitor email domains</p>
-        </div>
+    <div className="space-y-6">
+      <div>
+        <h1 className="text-3xl font-bold tracking-tight">Domain Management</h1>
+        <p className="text-muted-foreground">Manage and monitor email domains</p>
+      </div>
 
-        {/* Add Domain Form */}
-        <div className="bg-white rounded-lg shadow p-6 mb-8">
-          <h2 className="text-lg font-semibold text-gray-900 mb-4">Add New Domain</h2>
-          
-          {error && <div className="mb-4 p-4 bg-red-100 text-red-800 rounded-lg text-sm">{error}</div>}
-          {success && <div className="mb-4 p-4 bg-green-100 text-green-800 rounded-lg text-sm">{success}</div>}
+      <Card>
+        <CardHeader>
+          <CardTitle>Add New Domain</CardTitle>
+          <CardDescription>
+            Domain must exist in your Mailcow instance before it can be used for migrations
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          {error && (
+            <div className="mb-4 rounded-lg border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">
+              {error}
+            </div>
+          )}
+          {success && (
+            <div className="mb-4 rounded-lg border border-success/30 bg-success/10 px-4 py-3 text-sm text-success dark:text-success">
+              {success}
+            </div>
+          )}
 
           <form onSubmit={handleAddDomain} className="flex gap-2">
-            <input
+            <Input
               type="text"
               placeholder="example.com"
               value={newDomain}
               onChange={(e) => setNewDomain(e.target.value)}
-              className="flex-1 px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+              className="flex-1"
               required
             />
-            <button
-              type="submit"
-              disabled={adding}
-              className="px-6 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 font-medium disabled:opacity-50 disabled:cursor-not-allowed"
-            >
+            <Button type="submit" disabled={adding}>
               {adding ? 'Adding...' : 'Add Domain'}
-            </button>
+            </Button>
           </form>
+        </CardContent>
+      </Card>
 
-          <p className="text-xs text-gray-500 mt-3">
-            ℹ️ Domain must exist in your Mailcow instance before it can be used for migrations
-          </p>
-        </div>
-
-        {/* Domains List */}
-        <div className="bg-white rounded-lg shadow overflow-hidden">
-          <div className="px-6 py-4 border-b border-gray-200 bg-gray-50">
-            <h2 className="text-lg font-semibold text-gray-900">Configured Domains</h2>
-          </div>
-
+      <Card>
+        <CardHeader>
+          <CardTitle>Configured Domains</CardTitle>
+        </CardHeader>
+        <CardContent>
           {domains.length === 0 ? (
-            <div className="px-6 py-12 text-center text-gray-500">
+            <div className="py-8 text-center text-muted-foreground">
               <p>No domains added yet. Add your first domain above.</p>
             </div>
           ) : (
-            <div className="overflow-x-auto">
-              <table className="w-full">
-                <thead>
-                  <tr className="border-b border-gray-200 bg-gray-50">
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-700 uppercase">Domain</th>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-700 uppercase">Status</th>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-700 uppercase">Added</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {domains.map((domain) => (
-                    <tr key={domain.id} className="border-b border-gray-200 hover:bg-gray-50">
-                      <td className="px-6 py-4 text-sm font-medium text-gray-900">{domain.domain}</td>
-                      <td className="px-6 py-4 text-sm">
-                        <span
-                          className={`px-3 py-1 rounded-full text-xs font-semibold inline-block ${
-                            domain.created_in_mailcow
-                              ? 'bg-green-100 text-green-800'
-                              : 'bg-yellow-100 text-yellow-800'
-                          }`}
-                        >
-                          {domain.created_in_mailcow ? '✅ Active' : '⏳ Pending'}
-                        </span>
-                      </td>
-                      <td className="px-6 py-4 text-sm text-gray-600">
-                        {new Date(domain.created_at).toLocaleString()}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Domain</TableHead>
+                  <TableHead>Status</TableHead>
+                  <TableHead>Added</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {domains.map((domain) => (
+                  <TableRow key={domain.id}>
+                    <TableCell className="font-medium">{domain.domain}</TableCell>
+                    <TableCell>
+                      {domain.created_in_mailcow ? (
+                        <Badge className="border-transparent bg-success/15 text-success dark:text-success">
+                          <CheckCircle2 className="mr-1 h-3 w-3" />
+                          Active
+                        </Badge>
+                      ) : (
+                        <Badge className="border-transparent bg-amber-500/15 text-amber-700 dark:text-amber-400">
+                          <CircleDashed className="mr-1 h-3 w-3" />
+                          Pending
+                        </Badge>
+                      )}
+                    </TableCell>
+                    <TableCell className="text-muted-foreground">
+                      {new Date(domain.created_at).toLocaleString()}
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
           )}
-        </div>
-      </div>
+        </CardContent>
+      </Card>
     </div>
   )
 }

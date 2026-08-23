@@ -3,8 +3,11 @@ from app.db import get_db, dict_from_row
 from typing import Optional
 
 class DomainService:
-    def __init__(self):
-        self.mailcow = MailcowClient()
+    def __init__(self, mailcow: Optional[MailcowClient] = None):
+        # Defaults to the globally configured Mailcow instance; pass an
+        # explicit client (e.g. built from a job's own mailcow_url/api_key)
+        # to target a different instance instead.
+        self.mailcow = mailcow or MailcowClient()
     
     def ensure_domain_exists(self, domain: str, tenant_id: int) -> bool:
         """Ensure domain exists in Mailcow. If not, create it."""

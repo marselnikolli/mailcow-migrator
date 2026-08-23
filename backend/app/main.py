@@ -2,9 +2,9 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 
-# Import middleware and routers
-from app.middleware.tenant import TenantMiddleware
+# Import routers
 from app.routes import auth, jobs, domains, logs
+from app.config import settings
 
 # Database initialization
 from app.db import init_db, migrate_schema
@@ -20,17 +20,17 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="mailcow-migrator", lifespan=lifespan)
 
-# Add CORS middleware
+# Add CORS middleware - explicit origin allowlist (see CORS_ORIGINS env var)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=settings.CORS_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# Add tenant middleware
-app.add_middleware(TenantMiddleware)
+# Tenant scoping is derived exclusively from the verified JWT (see
+# app/deps/roles.py:get_current_user), never from client-supplied headers.
 
 # Health check endpoint
 @app.get("/health")

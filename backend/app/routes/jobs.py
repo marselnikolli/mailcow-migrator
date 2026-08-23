@@ -1,13 +1,74 @@
 from fastapi import APIRouter, Request, HTTPException, Depends, File, UploadFile
 from pydantic import BaseModel
 from typing import List
+from urllib.parse import urlparse
 from app.repositories.job_repo import JobRepository
-from app.models import JobStatus, JobCreate, JobResponse, BulkJobCreate, ImportedAccount
+from app.models import JobStatus, JobCreate, JobResponse, BulkJobCreate, ImportedAccount, JobUpdate, Job
 from app.core.queue import RedisQueue
 from app.core.import_parser import parse_import
+from app.core.security import UnsafeUrlError, validate_public_url
+from app.core.domains import DomainService
+from app.core.mailcow import MailcowClient
+from app.deps.roles import get_current_user
 
-router = APIRouter()
+router = APIRouter(dependencies=[Depends(get_current_user)])
 queue = RedisQueue()
+
+
+def _validate_job_targets(job: JobCreate) -> None:
+    """Reject jobs whose mailcow_url would make the worker issue requests to
+    internal/private network addresses (SSRF)."""
+    try:
+        validate_public_url(job.mailcow_url, field_name="mailcow_url")
+    except UnsafeUrlError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+def _ensure_target_domain(target_email: str, target_type: str, mailcow_url: str,
+                           mailcow_api_key: str, dry_run: bool, tenant_id: int) -> None:
+    """If the destination is a Mailcow instance, make sure the target
+    mailbox's domain exists there (creating it if needed) before the job is
+    queued, rather than leaving it to whenever a worker happens to pick the
+    job up. Skipped on dry runs, which shouldn't create anything for real."""
+    if target_type != "mailcow" or dry_run:
+        return
+
+    domain = target_email.split("@")[-1].strip().lower()
+    if not domain:
+        return
+
+    mailcow = MailcowClient(base_url=mailcow_url, api_key=mailcow_api_key)
+    DomainService(mailcow=mailcow).ensure_domain_exists(domain, tenant_id)
+
+
+def _apply_defaults(job: JobCreate) -> JobCreate:
+    """Mirror source -> target by default.
+
+    When no target email is provided, the new mailbox keeps the source address.
+    When no target password is provided, it keeps the source password.
+    """
+    target_email = (job.target_email or "").strip() or job.source_email.strip()
+    target_password = job.target_password or job.source_password
+    target_type = job.target_type or ("mailcow" if (job.mailcow_url or job.mailcow_api_key) else "imap")
+
+    target_server = job.target_server
+    if target_type == "mailcow" and job.mailcow_url and target_server.host in ("localhost", "127.0.0.1", ""):
+        # "localhost" is only meaningful if imapsync runs on the mail server
+        # itself; it runs in an isolated worker container here, so that
+        # default can never reach anything. Point the IMAP transfer at the
+        # Mailcow instance's own hostname instead, unless the caller set an
+        # explicit host of their own.
+        mailcow_host = urlparse(job.mailcow_url).hostname
+        if mailcow_host:
+            target_server = target_server.model_copy(update={"host": mailcow_host})
+
+    # Pydantic model needs copy() with updated fields
+    return job.model_copy(update={
+        "target_email": target_email,
+        "target_password": target_password,
+        "target_type": target_type,
+        "target_server": target_server,
+    })
 
 
 def _to_queue_job(job: JobCreate, tenant_id: int, db_job_id: int) -> dict:
@@ -32,11 +93,47 @@ def _to_queue_job(job: JobCreate, tenant_id: int, db_job_id: int) -> dict:
     }
 
 
+def _job_to_queue_dict(job: Job, tenant_id: int) -> dict:
+    """Build a worker queue payload from a stored Job row (used by retry/edit,
+    where we start from the DB record rather than a fresh JobCreate)."""
+    return {
+        "id": job.id,
+        "tenant_id": tenant_id,
+        "source_email": job.source_email,
+        "source_password": job.source_password or "",
+        "target_email": job.target_email,
+        "target_password": job.target_password or "",
+        "source_host": job.source_host,
+        "source_port": job.source_port,
+        "source_ssl": job.source_ssl,
+        "target_type": job.target_type,
+        "target_host": job.target_host,
+        "target_port": job.target_port,
+        "target_ssl": job.target_ssl,
+        "mailcow_url": job.mailcow_url,
+        "mailcow_api_key": job.mailcow_api_key,
+        "dry_run": job.dry_run,
+        "retry_count": 0
+    }
+
+
 @router.post("/create")
 async def create_job(request: Request, job_data: JobCreate):
     """Create a new migration job."""
     tenant_id = request.state.tenant_id
-    
+
+    job_data = _apply_defaults(job_data)
+    _validate_job_targets(job_data)
+
+    try:
+        _ensure_target_domain(
+            job_data.target_email, job_data.target_type,
+            job_data.mailcow_url, job_data.mailcow_api_key,
+            job_data.dry_run, tenant_id
+        )
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
     # Create job in database
     job = JobRepository.create_job(
         tenant_id=tenant_id,
@@ -55,7 +152,7 @@ async def create_job(request: Request, job_data: JobCreate):
         mailcow_api_key=job_data.mailcow_api_key,
         dry_run=job_data.dry_run
     )
-    
+
     # Push to queue for processing
     queue.push_job(_to_queue_job(job_data, tenant_id, job.id))
     
@@ -78,7 +175,31 @@ async def bulk_create_jobs(request: Request, bulk_data: BulkJobCreate):
         raise HTTPException(status_code=400, detail="No jobs provided")
     
     created = []
+    failed = []
+    # Domains are looked up/created at most once per distinct domain in this
+    # batch, since bulk imports commonly bring in many mailboxes on the same
+    # domain and there's no need to re-check Mailcow for each one.
+    checked_domains = set()
+
     for job_data in bulk_data.jobs:
+        job_data = _apply_defaults(job_data)
+        try:
+            _validate_job_targets(job_data)
+            domain = job_data.target_email.split("@")[-1].strip().lower()
+            if job_data.target_type == "mailcow" and not job_data.dry_run and domain not in checked_domains:
+                _ensure_target_domain(
+                    job_data.target_email, job_data.target_type,
+                    job_data.mailcow_url, job_data.mailcow_api_key,
+                    job_data.dry_run, tenant_id
+                )
+                checked_domains.add(domain)
+        except HTTPException as e:
+            failed.append({"source_email": job_data.source_email, "error": str(e.detail)})
+            continue
+        except Exception as e:
+            failed.append({"source_email": job_data.source_email, "error": str(e)})
+            continue
+
         job = JobRepository.create_job(
             tenant_id=tenant_id,
             source_email=job_data.source_email,
@@ -104,8 +225,8 @@ async def bulk_create_jobs(request: Request, bulk_data: BulkJobCreate):
             "target_email": job.target_email,
             "dry_run": job.dry_run
         })
-    
-    return {"total": len(created), "jobs": created}
+
+    return {"total": len(created), "jobs": created, "failed": failed}
 
 
 @router.post("/import-preview")
@@ -158,30 +279,122 @@ async def retry_job(request: Request, job_id: int):
     
     # Reset job status
     JobRepository.update_job_status(job_id, tenant_id, JobStatus.PENDING, error_message=None)
-    
+
     # Re-queue job with full config
-    queue_job = {
-        "id": job.id,
-        "tenant_id": tenant_id,
-        "source_email": job.source_email,
-        "source_password": job.source_password or "",
-        "target_email": job.target_email,
-        "target_password": job.target_password or "",
-        "source_host": job.source_host,
-        "source_port": job.source_port,
-        "source_ssl": job.source_ssl,
-        "target_type": job.target_type,
-        "target_host": job.target_host,
-        "target_port": job.target_port,
-        "target_ssl": job.target_ssl,
-        "mailcow_url": job.mailcow_url,
-        "mailcow_api_key": job.mailcow_api_key,
-        "dry_run": job.dry_run,
-        "retry_count": 0
-    }
-    queue.push_job(queue_job)
-    
+    queue.push_job(_job_to_queue_dict(job, tenant_id))
+
     return {"status": "queued"}
+
+
+@router.put("/{job_id}")
+async def update_job(request: Request, job_id: int, update: JobUpdate):
+    """Edit a job's destination configuration. Only allowed while the job is
+    still pending (a worker hasn't picked it up yet)."""
+    tenant_id = request.state.tenant_id
+
+    job = JobRepository.get_job_by_id(job_id, tenant_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    if job.status not in (JobStatus.PENDING, JobStatus.FAILED):
+        raise HTTPException(status_code=400, detail="Only pending or failed jobs can be edited")
+
+    fields = {}
+    if update.target_email is not None:
+        fields["target_email"] = update.target_email.strip() or job.source_email
+    if update.target_password is not None:
+        fields["target_password"] = update.target_password
+    if update.target_type is not None:
+        fields["target_type"] = update.target_type
+    if update.mailcow_url is not None:
+        try:
+            validate_public_url(update.mailcow_url, field_name="mailcow_url")
+        except UnsafeUrlError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+        fields["mailcow_url"] = update.mailcow_url
+    if update.target_server is not None:
+        host = update.target_server.host
+        effective_target_type = fields.get("target_type", job.target_type)
+        effective_mailcow_url = fields.get("mailcow_url", job.mailcow_url)
+        if effective_target_type == "mailcow" and effective_mailcow_url and host in ("localhost", "127.0.0.1", ""):
+            derived_host = urlparse(effective_mailcow_url).hostname
+            if derived_host:
+                host = derived_host
+        fields["target_host"] = host
+        fields["target_port"] = update.target_server.port
+        fields["target_ssl"] = int(update.target_server.ssl)
+    if update.mailcow_api_key is not None:
+        fields["mailcow_api_key"] = update.mailcow_api_key
+    if update.dry_run is not None:
+        fields["dry_run"] = int(update.dry_run)
+
+    if not fields:
+        raise HTTPException(status_code=400, detail="No fields to update")
+
+    effective_target_email = fields.get("target_email", job.target_email)
+    effective_target_type = fields.get("target_type", job.target_type)
+    effective_mailcow_url = fields.get("mailcow_url", job.mailcow_url)
+    effective_mailcow_api_key = fields.get("mailcow_api_key", job.mailcow_api_key)
+    effective_dry_run = bool(fields.get("dry_run", job.dry_run))
+
+    try:
+        _ensure_target_domain(
+            effective_target_email, effective_target_type,
+            effective_mailcow_url, effective_mailcow_api_key,
+            effective_dry_run, tenant_id
+        )
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    JobRepository.update_job(job_id, tenant_id, **fields)
+
+    # The queue holds a snapshot taken at creation time. Drop it and push a
+    # fresh one so the worker picks up the edit; if it's already gone (a
+    # worker grabbed it in the race window right before this request), the
+    # DB update above still stands as the record of what was requested.
+    if queue.remove_job(job_id):
+        updated_job = JobRepository.get_job_by_id(job_id, tenant_id)
+        queue.push_job(_job_to_queue_dict(updated_job, tenant_id))
+
+    return {"status": "updated", "id": job_id}
+
+
+@router.post("/{job_id}/cancel")
+async def cancel_job(request: Request, job_id: int):
+    """Cancel a pending or running job."""
+    tenant_id = request.state.tenant_id
+
+    job = JobRepository.get_job_by_id(job_id, tenant_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    if job.status in (JobStatus.COMPLETED, JobStatus.FAILED, JobStatus.CANCELLED):
+        raise HTTPException(status_code=400, detail=f"Job is already {job.status.value}")
+
+    still_queued = queue.remove_job(job_id)
+    if not still_queued:
+        # Already picked up by a worker - ask it to stop between log lines.
+        queue.request_cancel(job_id)
+
+    JobRepository.update_job_status(job_id, tenant_id, JobStatus.CANCELLED, progress=job.progress)
+    return {"status": "cancelled", "id": job_id}
+
+
+@router.delete("/{job_id}")
+async def delete_job(request: Request, job_id: int):
+    """Delete a job and its logs. Running jobs must be cancelled first."""
+    tenant_id = request.state.tenant_id
+
+    job = JobRepository.get_job_by_id(job_id, tenant_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    if job.status == JobStatus.RUNNING:
+        raise HTTPException(status_code=400, detail="Cancel the job before deleting it")
+
+    queue.remove_job(job_id)
+    queue.clear_job_log(job_id)
+    queue.clear_cancel(job_id)
+    JobRepository.delete_job(job_id, tenant_id)
+
+    return {"status": "deleted", "id": job_id}
 
 
 @router.get("/{job_id}")
@@ -202,6 +415,8 @@ async def get_job(request: Request, job_id: int):
         "source_host": job.source_host,
         "target_type": job.target_type,
         "target_host": job.target_host,
+        "target_port": job.target_port,
+        "target_ssl": job.target_ssl,
         "mailcow_url": job.mailcow_url,
         "dry_run": job.dry_run,
         "error_message": job.error_message,

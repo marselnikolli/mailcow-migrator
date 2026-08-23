@@ -133,6 +133,41 @@ class JobRepository:
         return jobs
     
     @staticmethod
+    def update_job(job_id: int, tenant_id: int, **fields) -> bool:
+        """Update arbitrary columns on a job. Only intended for editing jobs
+        that are still pending (enforced by the caller)."""
+        if not fields:
+            return False
+
+        set_clause = ", ".join(f"{column} = ?" for column in fields)
+        values = list(fields.values()) + [job_id, tenant_id]
+
+        conn = get_db()
+        cursor = conn.cursor()
+        cursor.execute(
+            f"UPDATE jobs SET {set_clause} WHERE id = ? AND tenant_id = ?",
+            values,
+        )
+        conn.commit()
+        success = cursor.rowcount > 0
+        conn.close()
+        return success
+
+    @staticmethod
+    def delete_job(job_id: int, tenant_id: int) -> bool:
+        """Delete a job and its logs."""
+        conn = get_db()
+        cursor = conn.cursor()
+
+        cursor.execute("DELETE FROM logs WHERE job_id = ?", (job_id,))
+        cursor.execute("DELETE FROM jobs WHERE id = ? AND tenant_id = ?", (job_id, tenant_id))
+
+        conn.commit()
+        success = cursor.rowcount > 0
+        conn.close()
+        return success
+
+    @staticmethod
     def mark_job_completed(job_id: int, tenant_id: int) -> bool:
         """Mark job as completed."""
         conn = get_db()

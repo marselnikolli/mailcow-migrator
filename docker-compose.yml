@@ -13,6 +13,8 @@ services:
       - SECRET_KEY=${SECRET_KEY}
       - SOURCE_IMAP_HOST=${SOURCE_IMAP_HOST}
       - SOURCE_IMAP_PORT=${SOURCE_IMAP_PORT}
+      - DEBUG=${DEBUG}
+      - CORS_ORIGINS=${CORS_ORIGINS}
     depends_on:
       - redis
     networks:

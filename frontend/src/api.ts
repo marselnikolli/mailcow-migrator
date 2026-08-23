@@ -54,6 +54,16 @@ export interface JobCreatePayload {
   dry_run: boolean
 }
 
+export interface JobUpdatePayload {
+  target_email?: string
+  target_password?: string
+  target_type?: 'imap' | 'mailcow'
+  target_server?: ServerConfig
+  mailcow_url?: string
+  mailcow_api_key?: string
+  dry_run?: boolean
+}
+
 export interface ImportedAccount {
   email: string
   password: string
@@ -85,6 +95,12 @@ export const jobsApi = {
     api.get(`/jobs/${jobId}`),
   retryJob: (jobId: number) =>
     api.post(`/jobs/retry/${jobId}`),
+  updateJob: (jobId: number, payload: JobUpdatePayload) =>
+    api.put(`/jobs/${jobId}`, payload),
+  cancelJob: (jobId: number) =>
+    api.post(`/jobs/${jobId}/cancel`),
+  deleteJob: (jobId: number) =>
+    api.delete(`/jobs/${jobId}`),
 }
 
 export const domainsApi = {
@@ -101,9 +117,13 @@ export const logsApi = {
     api.get(`/logs/${jobId}`),
   connectWebSocket: (jobId: number) => {
     const token = localStorage.getItem('token')
-    const tenantId = localStorage.getItem('tenant_id')
     const wsUrl = API_BASE_URL.replace('http', 'ws').replace('/api/v1', '')
-    return new WebSocket(`${wsUrl}/api/v1/logs/ws/${jobId}?token=${token}&tenant_id=${tenantId}`)
+    const ws = new WebSocket(`${wsUrl}/api/v1/logs/ws/${jobId}`)
+    // The JWT can't go in the URL (query strings end up in server/proxy logs
+    // and browser history), so it's sent as the first message instead. The
+    // server withholds any log data until it receives and verifies this.
+    ws.addEventListener('open', () => ws.send(JSON.stringify({ token })), { once: true })
+    return ws
   },
 }
 

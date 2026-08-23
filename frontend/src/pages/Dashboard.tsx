@@ -1,12 +1,19 @@
 import React, { useEffect, useState } from 'react'
 import { jobsApi } from '../api'
 import { Link } from 'react-router-dom'
-
-interface JobStats {
-  active: number
-  failed: number
-  completed: number
-}
+import { Button } from '@/components/ui/button'
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { Badge } from '@/components/ui/badge'
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '@/components/ui/table'
+import { Play, Mail, FolderOpen, Activity, AlertCircle, CheckCircle2 } from 'lucide-react'
+import { JobStatusBadge } from '@/lib/job-status'
 
 interface Job {
   id: number
@@ -15,10 +22,11 @@ interface Job {
   target_email: string
   progress: number
   created_at: string
+  dry_run?: boolean
 }
 
 const Dashboard: React.FC = () => {
-  const [stats, setStats] = useState<JobStats>({ active: 0, failed: 0, completed: 0 })
+  const [stats, setStats] = useState({ active: 0, failed: 0, completed: 0 })
   const [recentJobs, setRecentJobs] = useState<Job[]>([])
   const [loading, setLoading] = useState(true)
 
@@ -28,9 +36,8 @@ const Dashboard: React.FC = () => {
         const response = await jobsApi.listJobs(undefined, 10, 0)
         const jobs = response.data
 
-        // Calculate stats
         const stats = {
-          active: jobs.filter((j: Job) => j.status === 'running').length,
+          active: jobs.filter((j: Job) => j.status === 'running' || j.status === 'pending').length,
           failed: jobs.filter((j: Job) => j.status === 'failed').length,
           completed: jobs.filter((j: Job) => j.status === 'completed').length,
         }
@@ -45,131 +52,103 @@ const Dashboard: React.FC = () => {
     }
 
     fetchData()
-    // Refresh every 5 seconds
     const interval = setInterval(fetchData, 5000)
     return () => clearInterval(interval)
   }, [])
 
-  const getStatusColor = (status: string) => {
-    switch (status) {
-      case 'running': return 'bg-blue-100 text-blue-800'
-      case 'completed': return 'bg-green-100 text-green-800'
-      case 'failed': return 'bg-red-100 text-red-800'
-      case 'pending': return 'bg-yellow-100 text-yellow-800'
-      default: return 'bg-gray-100 text-gray-800'
-    }
+  if (loading) {
+    return <div className="flex items-center justify-center py-24 text-muted-foreground">Loading...</div>
   }
 
-  if (loading) {
-    return (
-      <div className="min-h-screen bg-gray-100 py-12 px-4 sm:px-6 lg:px-8 flex justify-center items-center">
-        <div className="text-gray-600">Loading...</div>
-      </div>
-    )
-  }
+  const statCards = [
+    { label: 'Active Migrations', value: stats.active, icon: Activity, color: 'text-blue-600' },
+    { label: 'Failed Jobs', value: stats.failed, icon: AlertCircle, color: 'text-red-600' },
+    { label: 'Completed', value: stats.completed, icon: CheckCircle2, color: 'text-green-600' },
+  ]
 
   return (
-    <div className="min-h-screen bg-gray-100 py-12 px-4 sm:px-6 lg:px-8">
-      <div className="max-w-7xl mx-auto">
-        <div className="mb-8">
-          <h1 className="text-3xl font-bold text-gray-900">Dashboard</h1>
-          <p className="text-gray-600">Mail migration analytics and overview</p>
-        </div>
+    <div className="space-y-6">
+      <div>
+        <h1 className="text-3xl font-bold tracking-tight">Dashboard</h1>
+        <p className="text-muted-foreground">Mail migration analytics and overview</p>
+      </div>
 
-        {/* Stats Cards */}
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
-          <div className="bg-white rounded-lg shadow p-6">
-            <div className="flex items-center">
-              <div className="flex-1">
-                <p className="text-gray-500 text-sm font-medium">Active Migrations</p>
-                <p className="text-3xl font-bold text-blue-600">{stats.active}</p>
-              </div>
-              <div className="text-4xl">▶️</div>
-            </div>
-          </div>
+      <div className="grid grid-cols-1 gap-6 md:grid-cols-3">
+        {statCards.map((card) => {
+          const Icon = card.icon
+          return (
+            <Card key={card.label}>
+              <CardContent className="flex items-center justify-between p-6">
+                <div>
+                  <p className="text-sm font-medium text-muted-foreground">{card.label}</p>
+                  <p className={`text-3xl font-bold ${card.color}`}>{card.value}</p>
+                </div>
+                <Icon className={`h-8 w-8 ${card.color}`} />
+              </CardContent>
+            </Card>
+          )
+        })}
+      </div>
 
-          <div className="bg-white rounded-lg shadow p-6">
-            <div className="flex items-center">
-              <div className="flex-1">
-                <p className="text-gray-500 text-sm font-medium">Failed Jobs</p>
-                <p className="text-3xl font-bold text-red-600">{stats.failed}</p>
-              </div>
-              <div className="text-4xl">❌</div>
-            </div>
-          </div>
-
-          <div className="bg-white rounded-lg shadow p-6">
-            <div className="flex items-center">
-              <div className="flex-1">
-                <p className="text-gray-500 text-sm font-medium">Completed</p>
-                <p className="text-3xl font-bold text-green-600">{stats.completed}</p>
-              </div>
-              <div className="text-4xl">✅</div>
-            </div>
-          </div>
-        </div>
-
-        {/* Quick Action */}
-        <div className="bg-white rounded-lg shadow p-6 mb-8">
-          <h2 className="text-lg font-semibold text-gray-900 mb-4">Quick Actions</h2>
-          <div className="flex gap-4">
-            <Link
-              to="/jobs"
-              className="px-6 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 font-medium"
-            >
+      <Card>
+        <CardHeader>
+          <CardTitle>Quick Actions</CardTitle>
+        </CardHeader>
+        <CardContent className="flex flex-wrap gap-3">
+          <Link to="/jobs">
+            <Button>
+              <Play className="mr-2 h-4 w-4" />
               Create New Migration Job
-            </Link>
-            <Link
-              to="/domains"
-              className="px-6 py-2 bg-gray-600 text-white rounded-lg hover:bg-gray-700 font-medium"
-            >
+            </Button>
+          </Link>
+          <Link to="/domains">
+            <Button variant="outline">
+              <FolderOpen className="mr-2 h-4 w-4" />
               Manage Domains
-            </Link>
-          </div>
-        </div>
+            </Button>
+          </Link>
+        </CardContent>
+      </Card>
 
-        {/* Recent Jobs */}
-        <div className="bg-white rounded-lg shadow">
-          <div className="px-6 py-4 border-b border-gray-200">
-            <h2 className="text-lg font-semibold text-gray-900">Recent Migrations</h2>
-          </div>
-
+      <Card>
+        <CardHeader>
+          <CardTitle>Recent Migrations</CardTitle>
+        </CardHeader>
+        <CardContent>
           {recentJobs.length === 0 ? (
-            <div className="px-6 py-12 text-center text-gray-500">
-              <p>No jobs yet. <Link to="/jobs" className="text-blue-600 hover:text-blue-700">Create one now!</Link></p>
+            <div className="py-8 text-center text-muted-foreground">
+              <Mail className="mx-auto mb-2 h-8 w-8 text-muted-foreground/50" />
+              <p>No jobs yet. <Link to="/jobs" className="text-primary hover:underline">Create one now!</Link></p>
             </div>
           ) : (
-            <div className="overflow-x-auto">
-              <table className="w-full">
-                <thead>
-                  <tr className="border-b border-gray-200 bg-gray-50">
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-700 uppercase">Source</th>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-700 uppercase">Target</th>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-700 uppercase">Status</th>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-700 uppercase">Created</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {recentJobs.map((job) => (
-                    <tr key={job.id} className="border-b border-gray-200 hover:bg-gray-50">
-                      <td className="px-6 py-4 text-sm text-gray-900">{job.source_email}</td>
-                      <td className="px-6 py-4 text-sm text-gray-900">{job.target_email}</td>
-                      <td className="px-6 py-4 text-sm">
-                        <span className={`px-3 py-1 rounded-full text-xs font-medium ${getStatusColor(job.status)}`}>
-                          {job.status}
-                        </span>
-                      </td>
-                      <td className="px-6 py-4 text-sm text-gray-600">
-                        {new Date(job.created_at).toLocaleString()}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Source</TableHead>
+                  <TableHead>Target</TableHead>
+                  <TableHead>Status</TableHead>
+                  <TableHead>Created</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {recentJobs.map((job) => (
+                  <TableRow key={job.id}>
+                    <TableCell className="text-sm">{job.source_email}</TableCell>
+                    <TableCell className="text-sm">{job.target_email}</TableCell>
+                    <TableCell>
+                      <JobStatusBadge status={job.status} />
+                      {job.dry_run && <Badge variant="outline" className="ml-1">dry run</Badge>}
+                    </TableCell>
+                    <TableCell className="text-sm text-muted-foreground">
+                      {new Date(job.created_at).toLocaleString()}
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
           )}
-        </div>
-      </div>
+        </CardContent>
+      </Card>
     </div>
   )
 }

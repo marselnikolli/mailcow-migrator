@@ -9,6 +9,7 @@ class JobStatus(str, Enum):
     RUNNING = "running"
     COMPLETED = "completed"
     FAILED = "failed"
+    CANCELLED = "cancelled"
 
 class UserRole(str, Enum):
     OWNER = "owner"
@@ -96,7 +97,7 @@ class ServerConfig(BaseModel):
 
 class JobCreate(BaseModel):
     source_email: str
-    target_email: str
+    target_email: Optional[str] = None
     source_password: str = ""
     target_password: str = ""
     source_server: ServerConfig = ServerConfig()
@@ -108,6 +109,17 @@ class JobCreate(BaseModel):
 
 class BulkJobCreate(BaseModel):
     jobs: List[JobCreate]
+
+class JobUpdate(BaseModel):
+    """Fields editable on a job while it's still pending (not yet picked up
+    by a worker). Anything left as None is left unchanged."""
+    target_email: Optional[str] = None
+    target_password: Optional[str] = None
+    target_type: Optional[str] = None
+    target_server: Optional[ServerConfig] = None
+    mailcow_url: Optional[str] = None
+    mailcow_api_key: Optional[str] = None
+    dry_run: Optional[bool] = None
 
 class ImportedAccount(BaseModel):
     email: str

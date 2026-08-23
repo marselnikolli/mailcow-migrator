@@ -44,7 +44,9 @@ class AuthService:
     def create_token_response(user_id: int, tenant_id: int, role: str) -> dict:
         """Create token response with user info."""
         token = AuthService.create_access_token(
-            data={"sub": user_id, "tenant_id": tenant_id, "role": role}
+            # "sub" must be a string per the JWT spec (python-jose enforces this
+            # on decode); everything else can stay as its natural type.
+            data={"sub": str(user_id), "tenant_id": tenant_id, "role": role}
         )
         return {
             "access_token": token,
