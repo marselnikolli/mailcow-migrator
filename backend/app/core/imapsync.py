@@ -1,34 +1,54 @@
 import subprocess
 import logging
-from typing import Tuple
+from typing import Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
 class ImapsyncWrapper:
     @staticmethod
-    def run_sync(source_email: str, source_password: str, target_email: str, 
-                 target_password: str, source_host: str = None) -> Tuple[bool, str]:
+    def _build_cmd(source_email: str, source_password: str, target_email: str,
+                   target_password: str, source_host: str = None, source_port: int = 993,
+                   source_ssl: bool = True, target_host: str = "localhost",
+                   target_port: int = 993, target_ssl: bool = True,
+                   dry_run: bool = False) -> list:
+        """Build the imapsync command."""
+        cmd = [
+            "imapsync",
+            f"--host1={source_host or 'imap.gmail.com'}",
+            f"--port1={source_port or 993}",
+            f"--user1={source_email}",
+            f"--password1={source_password}",
+            "--ssl1" if source_ssl else "--nossl1",
+            f"--host2={target_host or 'localhost'}",
+            f"--port2={target_port or 993}",
+            f"--user2={target_email}",
+            f"--password2={target_password}",
+            "--ssl2" if target_ssl else "--nossl2",
+            "--all",
+        ]
+        if dry_run:
+            cmd.append("--dry")
+        return cmd
+
+    @staticmethod
+    def run_sync(source_email: str, source_password: str, target_email: str,
+                 target_password: str, source_host: str = None, source_port: int = 993,
+                 source_ssl: bool = True, target_host: str = "localhost",
+                 target_port: int = 993, target_ssl: bool = True,
+                 dry_run: bool = False) -> Tuple[bool, str]:
         """
         Run imapsync to migrate emails.
-        
+
         Returns:
             Tuple of (success: bool, output: str)
         """
         try:
-            # Build imapsync command
-            cmd = [
-                "imapsync",
-                f"--host1={source_host or 'imap.gmail.com'}",
-                f"--user1={source_email}",
-                f"--password1={source_password}",
-                "--ssl1",
-                "--host2=localhost",
-                f"--user2={target_email}",
-                f"--password2={target_password}",
-                "--ssl2",
-                "--all",
-                "--skipheader"
-            ]
+            cmd = ImapsyncWrapper._build_cmd(
+                source_email, source_password, target_email, target_password,
+                source_host=source_host, source_port=source_port, source_ssl=source_ssl,
+                target_host=target_host, target_port=target_port, target_ssl=target_ssl,
+                dry_run=dry_run
+            )
             
             # Run command
             result = subprocess.run(
@@ -56,24 +76,20 @@ class ImapsyncWrapper:
     
     @staticmethod
     def run_sync_with_logging(source_email: str, source_password: str, target_email: str,
-                             target_password: str, on_log_callback=None, source_host: str = None) -> Tuple[bool, str]:
+                             target_password: str, on_log_callback=None, source_host: str = None,
+                             source_port: int = 993, source_ssl: bool = True,
+                             target_host: str = "localhost", target_port: int = 993,
+                             target_ssl: bool = True, dry_run: bool = False) -> Tuple[bool, str]:
         """
         Run imapsync with logging callback for real-time output.
         """
         try:
-            cmd = [
-                "imapsync",
-                f"--host1={source_host or 'imap.gmail.com'}",
-                f"--user1={source_email}",
-                f"--password1={source_password}",
-                "--ssl1",
-                "--host2=localhost",
-                f"--user2={target_email}",
-                f"--password2={target_password}",
-                "--ssl2",
-                "--all",
-                "--skipheader"
-            ]
+            cmd = ImapsyncWrapper._build_cmd(
+                source_email, source_password, target_email, target_password,
+                source_host=source_host, source_port=source_port, source_ssl=source_ssl,
+                target_host=target_host, target_port=target_port, target_ssl=target_ssl,
+                dry_run=dry_run
+            )
             
             output_lines = []
             process = subprocess.Popen(
@@ -97,9 +113,10 @@ class ImapsyncWrapper:
                 logger.info(f"imapsync completed successfully for {source_email} -> {target_email}")
                 return True, full_output
             else:
-                stderr = process.stderr.read() if process.stderr else "Unknown error"
-                logger.error(f"imapsync failed: {stderr}")
-                return False, stderr
+                stderr = process.stderr.read() if process.stderr else ""
+                detail = stderr or "\n".join(output_lines) or "Unknown error"
+                logger.error(f"imapsync failed: {detail}")
+                return False, detail
                 
         except subprocess.TimeoutExpired:
             process.kill()

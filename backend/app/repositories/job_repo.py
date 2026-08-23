@@ -5,15 +5,35 @@ from datetime import datetime
 
 class JobRepository:
     @staticmethod
-    def create_job(tenant_id: int, source_email: str, target_email: str) -> Job:
+    def create_job(tenant_id: int, source_email: str, target_email: str,
+                   source_password: str = "", target_password: str = "",
+                   source_host: str = None, source_port: int = 993, source_ssl: bool = True,
+                   target_type: str = "imap", target_host: str = None,
+                   target_port: int = 993, target_ssl: bool = True,
+                   mailcow_url: str = None, mailcow_api_key: str = None,
+                   dry_run: bool = False) -> Job:
         """Create a new job."""
         conn = get_db()
         cursor = conn.cursor()
         
         cursor.execute("""
-            INSERT INTO jobs (tenant_id, source_email, target_email, status)
-            VALUES (?, ?, ?, ?)
-        """, (tenant_id, source_email, target_email, JobStatus.PENDING.value))
+            INSERT INTO jobs (
+                tenant_id, source_email, target_email,
+                source_password, target_password,
+                source_host, source_port, source_ssl,
+                target_type, target_host, target_port, target_ssl,
+                mailcow_url, mailcow_api_key, dry_run,
+                status
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            tenant_id, source_email, target_email,
+            source_password, target_password,
+            source_host, source_port, int(source_ssl),
+            target_type, target_host, target_port, int(target_ssl),
+            mailcow_url, mailcow_api_key, int(dry_run),
+            JobStatus.PENDING.value
+        ))
         
         job_id = cursor.lastrowid
         conn.commit()
@@ -24,6 +44,18 @@ class JobRepository:
             tenant_id=tenant_id,
             source_email=source_email,
             target_email=target_email,
+            source_password=source_password,
+            target_password=target_password,
+            source_host=source_host,
+            source_port=source_port,
+            source_ssl=source_ssl,
+            target_type=target_type,
+            target_host=target_host,
+            target_port=target_port,
+            target_ssl=target_ssl,
+            mailcow_url=mailcow_url,
+            mailcow_api_key=mailcow_api_key,
+            dry_run=dry_run,
             status=JobStatus.PENDING
         )
     
@@ -60,6 +92,9 @@ class JobRepository:
         
         if row:
             row_dict = dict_from_row(row)
+            row_dict["source_ssl"] = bool(row_dict.get("source_ssl"))
+            row_dict["target_ssl"] = bool(row_dict.get("target_ssl"))
+            row_dict["dry_run"] = bool(row_dict.get("dry_run"))
             return Job(**row_dict)
         return None
     
@@ -91,6 +126,9 @@ class JobRepository:
         jobs = []
         for row in rows:
             row_dict = dict_from_row(row)
+            row_dict["source_ssl"] = bool(row_dict.get("source_ssl"))
+            row_dict["target_ssl"] = bool(row_dict.get("target_ssl"))
+            row_dict["dry_run"] = bool(row_dict.get("dry_run"))
             jobs.append(Job(**row_dict))
         return jobs
     

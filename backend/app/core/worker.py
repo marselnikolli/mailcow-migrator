@@ -16,7 +16,6 @@ class MigrationWorker:
         self.queue = RedisQueue()
         self.imapsync = ImapsyncWrapper()
         self.domain_service = DomainService()
-        self.mailcow = MailcowClient()
         self.job_logger = StructuredLogger()
         self.max_retries = 3
     
@@ -25,13 +24,25 @@ class MigrationWorker:
         job_id = job.get("id")
         tenant_id = job.get("tenant_id")
         source_email = job.get("source_email")
-        source_password = job.get("source_password")
+        source_password = job.get("source_password", "")
         target_email = job.get("target_email")
-        target_password = job.get("target_password")
+        target_password = job.get("target_password", "")
         source_host = job.get("source_host")
+        source_port = job.get("source_port", 993)
+        source_ssl = job.get("source_ssl", True)
+        target_type = job.get("target_type", "imap")
+        target_host = job.get("target_host", "localhost")
+        target_port = job.get("target_port", 993)
+        target_ssl = job.get("target_ssl", True)
+        mailcow_url = job.get("mailcow_url")
+        mailcow_api_key = job.get("mailcow_api_key")
+        dry_run = job.get("dry_run", False)
         
         try:
             self.job_logger.log_info(job_id, f"Starting migration for {source_email} -> {target_email}")
+            
+            if dry_run:
+                self.job_logger.log_info(job_id, "DRY RUN mode: no data will be transferred, no mailboxes will be created")
             
             # Update job status to running
             JobRepository.update_job_status(job_id, tenant_id, JobStatus.RUNNING)
@@ -39,20 +50,35 @@ class MigrationWorker:
             # Extract domain from target email
             target_domain = target_email.split("@")[1]
             
-            # Ensure domain exists in Mailcow
-            self.job_logger.log_info(job_id, f"Ensuring domain {target_domain} exists in Mailcow")
-            try:
-                self.domain_service.ensure_domain_exists(target_domain, tenant_id)
-            except Exception as e:
-                raise Exception(f"Failed to ensure domain: {str(e)}")
-            
-            # Create mailbox in Mailcow
-            self.job_logger.log_info(job_id, f"Creating mailbox {target_email} in Mailcow")
-            if not self.mailcow.check_mailbox_exists(target_email):
-                try:
-                    self.mailcow.create_mailbox(target_email, target_password)
-                except Exception as e:
-                    raise Exception(f"Failed to create mailbox: {str(e)}")
+            # If target is a Mailcow instance, create domain + mailbox via its API (skip on dry run)
+            if target_type == "mailcow":
+                mailcow = MailcowClient(base_url=mailcow_url, api_key=mailcow_api_key)
+                
+                self.job_logger.log_info(job_id, f"Ensuring domain {target_domain} exists in Mailcow ({mailcow.base_url})")
+                if not dry_run:
+                    if not mailcow.check_domain_exists(target_domain):
+                        try:
+                            mailcow.create_domain(target_domain)
+                            self.job_logger.log_info(job_id, f"Created domain {target_domain} in Mailcow")
+                        except Exception as e:
+                            raise Exception(f"Failed to create domain in Mailcow: {str(e)}")
+                    else:
+                        self.job_logger.log_info(job_id, f"Domain {target_domain} already exists in Mailcow")
+                    
+                    self.job_logger.log_info(job_id, f"Creating mailbox {target_email} in Mailcow")
+                    if not mailcow.check_mailbox_exists(target_email):
+                        try:
+                            mailcow.create_mailbox(target_email, target_password)
+                            self.job_logger.log_info(job_id, f"Created mailbox {target_email} in Mailcow")
+                        except Exception as e:
+                            raise Exception(f"Failed to create mailbox: {str(e)}")
+                    else:
+                        self.job_logger.log_info(job_id, f"Mailbox {target_email} already exists in Mailcow")
+                else:
+                    self.job_logger.log_info(job_id, f"Dry run: skipping domain/mailbox creation in Mailcow")
+            else:
+                # Generic IMAP target - no domain/mailbox creation
+                self.job_logger.log_info(job_id, f"Target is generic IMAP server ({target_host}:{target_port}) - skipping domain/mailbox creation")
             
             # Run imapsync with logging
             self.job_logger.log_info(job_id, "Starting IMAP sync")
@@ -67,11 +93,20 @@ class MigrationWorker:
                 target_email=target_email,
                 target_password=target_password,
                 on_log_callback=on_log,
-                source_host=source_host
+                source_host=source_host,
+                source_port=source_port,
+                source_ssl=source_ssl,
+                target_host=target_host,
+                target_port=target_port,
+                target_ssl=target_ssl,
+                dry_run=dry_run
             )
             
             if success:
-                self.job_logger.log_info(job_id, "Migration completed successfully")
+                if dry_run:
+                    self.job_logger.log_info(job_id, "Dry run completed successfully - no data was transferred")
+                else:
+                    self.job_logger.log_info(job_id, "Migration completed successfully")
                 JobRepository.mark_job_completed(job_id, tenant_id)
                 return True
             else:
@@ -112,3 +147,6 @@ class MigrationWorker:
             except Exception as e:
                 logger.error(f"Worker error: {str(e)}")
                 time.sleep(poll_interval)
+
+if __name__ == "__main__":
+    MigrationWorker().start()

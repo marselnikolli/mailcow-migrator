@@ -5,7 +5,7 @@ services:
     build:
       context: ./backend
     ports:
-      - "8000:8000"
+      - "4300:8000"
     environment:
       - MAILCOW_URL=${MAILCOW_URL}
       - MAILCOW_API_KEY=${MAILCOW_API_KEY}
@@ -42,15 +42,17 @@ services:
     networks:
       - mailcow-network
     restart: unless-stopped
+    volumes:
+      - ./backend:/app
     command: python -m app.core.worker
 
   frontend:
     build:
       context: ./frontend
+      args:
+        VITE_API_URL: http://localhost:4300/api/v1
     ports:
-      - "3000:80"
-    environment:
-      - VITE_API_URL=http://backend:8000
+      - "4301:80"
     depends_on:
       - backend
     networks:
@@ -60,7 +62,7 @@ services:
   redis:
     image: redis:7-alpine
     ports:
-      - "6379:6379"
+      - "4302:6379"
     networks:
       - mailcow-network
     restart: unless-stopped

@@ -3,9 +3,9 @@ from typing import Optional
 from app.config import settings
 
 class MailcowClient:
-    def __init__(self):
-        self.base_url = settings.MAILCOW_URL
-        self.api_key = settings.MAILCOW_API_KEY
+    def __init__(self, base_url: str = None, api_key: str = None):
+        self.base_url = base_url or settings.MAILCOW_URL
+        self.api_key = api_key or settings.MAILCOW_API_KEY
         self.headers = {
             "X-API-Key": self.api_key,
             "Content-Type": "application/json"

@@ -82,6 +82,35 @@ def init_db():
     conn.commit()
     conn.close()
 
+def migrate_schema():
+    """Add columns added after the initial release (idempotent)."""
+    conn = get_db()
+    cursor = conn.cursor()
+
+    existing = {row["name"] for row in cursor.execute("PRAGMA table_info(jobs)").fetchall()}
+
+    migrations = {
+        "source_password": "TEXT",
+        "target_password": "TEXT",
+        "source_host": "TEXT DEFAULT 'imap.gmail.com'",
+        "source_port": "INTEGER DEFAULT 993",
+        "source_ssl": "INTEGER DEFAULT 1",
+        "target_type": "TEXT DEFAULT 'imap'",
+        "target_host": "TEXT DEFAULT 'localhost'",
+        "target_port": "INTEGER DEFAULT 993",
+        "target_ssl": "INTEGER DEFAULT 1",
+        "mailcow_url": "TEXT",
+        "mailcow_api_key": "TEXT",
+        "dry_run": "INTEGER DEFAULT 0",
+    }
+
+    for column, definition in migrations.items():
+        if column not in existing:
+            cursor.execute(f"ALTER TABLE jobs ADD COLUMN {column} {definition}")
+
+    conn.commit()
+    conn.close()
+
 def dict_from_row(row: Optional[sqlite3.Row]) -> Optional[Dict[str, Any]]:
     """Convert sqlite3.Row to dictionary."""
     if row is None:

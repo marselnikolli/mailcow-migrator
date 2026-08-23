@@ -7,12 +7,13 @@ from app.middleware.tenant import TenantMiddleware
 from app.routes import auth, jobs, domains, logs
 
 # Database initialization
-from app.db import init_db
+from app.db import init_db, migrate_schema
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Startup
     init_db()
+    migrate_schema()
     yield
     # Shutdown
     pass

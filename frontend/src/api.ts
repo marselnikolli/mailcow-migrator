@@ -1,6 +1,6 @@
 import axios, { AxiosInstance } from 'axios'
 
-const API_BASE_URL = process.env.VITE_API_URL || 'http://localhost:8000/api/v1'
+const API_BASE_URL = (import.meta.env.VITE_API_URL as string) || 'http://localhost:8000/api/v1'
 
 const api: AxiosInstance = axios.create({
   baseURL: API_BASE_URL,
@@ -35,6 +35,30 @@ api.interceptors.response.use(
   }
 )
 
+export interface ServerConfig {
+  host: string
+  port: number
+  ssl: boolean
+}
+
+export interface JobCreatePayload {
+  source_email: string
+  target_email: string
+  source_password: string
+  target_password: string
+  source_server: ServerConfig
+  target_type: 'imap' | 'mailcow'
+  target_server: ServerConfig
+  mailcow_url?: string
+  mailcow_api_key?: string
+  dry_run: boolean
+}
+
+export interface ImportedAccount {
+  email: string
+  password: string
+}
+
 export const authApi = {
   register: (email: string, password: string, tenantName: string) =>
     api.post('/auth/register', { email, password, tenant_name: tenantName }),
@@ -44,8 +68,17 @@ export const authApi = {
 }
 
 export const jobsApi = {
-  createJob: (sourceEmail: string, sourcePassword: string, targetEmail: string, targetPassword: string, domain: string, sourceHost?: string) =>
-    api.post('/jobs/create', { source_email: sourceEmail, source_password: sourcePassword, target_email: targetEmail, target_password: targetPassword, domain, source_host: sourceHost }),
+  createJob: (payload: JobCreatePayload) =>
+    api.post('/jobs/create', payload),
+  bulkCreateJobs: (jobs: JobCreatePayload[]) =>
+    api.post('/jobs/bulk-create', { jobs }),
+  importPreview: (file: File) => {
+    const formData = new FormData()
+    formData.append('file', file)
+    return api.post('/jobs/import-preview', formData, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+    })
+  },
   listJobs: (status?: string, limit = 100, offset = 0) =>
     api.get('/jobs/list', { params: { status, limit, offset } }),
   getJob: (jobId: number) =>

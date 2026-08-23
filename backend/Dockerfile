@@ -9,17 +9,29 @@ RUN apt-get update && apt-get install -y \
     libmail-imapclient-perl \
     libjson-webtoken-perl \
     libmodule-scandeps-perl \
+    libunicode-string-perl \
+    libencode-imaputf7-perl \
+    libregexp-common-perl \
+    libio-tee-perl \
+    libfile-copy-recursive-perl \
+    libterm-readkey-perl \
+    libauthen-ntlm-perl \
+    libdata-uniqid-perl \
+    libtest-pod-perl \
+    liburi-perl \
+    libwww-perl \
+    libreadonly-perl \
+    libsys-meminfo-perl \
+    libfile-tail-perl \
+    procps \
     git \
     curl \
     && rm -rf /var/lib/apt/lists/*
 
-# Install imapsync from CPAN or source
-RUN apt-get update && apt-get install -y \
-    build-essential \
-    libssl-dev \
-    && curl -L https://imapsync.lamiral.info/imapsync -o /usr/local/bin/imapsync \
+# Install imapsync single-file binary (apt package was dropped in Debian 12+)
+RUN apt-get update && apt-get install -y build-essential libssl-dev \
+    && curl -L --fail https://imapsync.lamiral.info/imapsync -o /usr/local/bin/imapsync \
     && chmod +x /usr/local/bin/imapsync \
-    || echo "Warning: imapsync installation from URL failed, will try CPAN" \
     && apt-get remove -y build-essential libssl-dev \
     && rm -rf /var/lib/apt/lists/*
 

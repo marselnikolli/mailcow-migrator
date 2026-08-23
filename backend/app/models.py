@@ -1,5 +1,5 @@
 from pydantic import BaseModel, EmailStr
-from typing import Optional
+from typing import Optional, List
 from datetime import datetime
 from enum import Enum
 
@@ -50,6 +50,18 @@ class Job(BaseModel):
     tenant_id: int
     source_email: str
     target_email: str
+    source_password: Optional[str] = None
+    target_password: Optional[str] = None
+    source_host: Optional[str] = None
+    source_port: Optional[int] = 993
+    source_ssl: Optional[bool] = True
+    target_type: Optional[str] = "imap"
+    target_host: Optional[str] = None
+    target_port: Optional[int] = 993
+    target_ssl: Optional[bool] = True
+    mailcow_url: Optional[str] = None
+    mailcow_api_key: Optional[str] = None
+    dry_run: Optional[bool] = False
     status: JobStatus = JobStatus.PENDING
     progress: int = 0
     error_message: Optional[str] = None
@@ -77,10 +89,33 @@ class UserCreate(BaseModel):
     password: str
     role: UserRole = UserRole.VIEWER
 
+class ServerConfig(BaseModel):
+    host: str = "imap.gmail.com"
+    port: int = 993
+    ssl: bool = True
+
 class JobCreate(BaseModel):
     source_email: str
     target_email: str
-    domain: str
+    source_password: str = ""
+    target_password: str = ""
+    source_server: ServerConfig = ServerConfig()
+    target_type: str = "imap"
+    target_server: ServerConfig = ServerConfig(host="localhost")
+    mailcow_url: str = None
+    mailcow_api_key: str = None
+    dry_run: bool = False
+
+class BulkJobCreate(BaseModel):
+    jobs: List[JobCreate]
+
+class ImportedAccount(BaseModel):
+    email: str
+    password: str
+
+class ImportPreviewResponse(BaseModel):
+    total: int
+    accounts: List[ImportedAccount]
 
 class JobResponse(BaseModel):
     id: int
@@ -88,6 +123,10 @@ class JobResponse(BaseModel):
     progress: int
     source_email: str
     target_email: str
+    source_host: Optional[str] = None
+    target_type: Optional[str] = "imap"
+    target_host: Optional[str] = None
+    dry_run: Optional[bool] = False
     error_message: Optional[str] = None
     created_at: datetime
     completed_at: Optional[datetime] = None
