@@ -51,10 +51,15 @@ class MailcowClient:
             raise Exception(f"Failed to create mailbox: {str(e)}")
     
     def check_mailbox_exists(self, email: str) -> bool:
-        """Check if mailbox exists in Mailcow."""
+        """Check if mailbox exists in Mailcow.
+
+        Mailcow's get/mailbox endpoint returns HTTP 200 with an empty {} for
+        a non-existent mailbox (not an error status), so a 2xx response alone
+        is not enough - the body must actually be non-empty.
+        """
         try:
             result = self._make_request("GET", f"get/mailbox/{email}")
-            return True
+            return bool(result)
         except Exception:
             return False
     
