@@ -11,7 +11,8 @@ class JobRepository:
                    target_type: str = "imap", target_host: str = None,
                    target_port: int = 993, target_ssl: bool = True,
                    mailcow_url: str = None, mailcow_api_key: str = None,
-                   dry_run: bool = False) -> Job:
+                   dry_run: bool = False,
+                   sync_calendar: bool = False, sync_contacts: bool = False) -> Job:
         """Create a new job."""
         conn = get_db()
         cursor = conn.cursor()
@@ -23,15 +24,17 @@ class JobRepository:
                 source_host, source_port, source_ssl,
                 target_type, target_host, target_port, target_ssl,
                 mailcow_url, mailcow_api_key, dry_run,
+                sync_calendar, sync_contacts,
                 status
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             tenant_id, source_email, target_email,
             source_password, target_password,
             source_host, source_port, int(source_ssl),
             target_type, target_host, target_port, int(target_ssl),
             mailcow_url, mailcow_api_key, int(dry_run),
+            int(sync_calendar), int(sync_contacts),
             JobStatus.PENDING.value
         ))
         
@@ -56,6 +59,8 @@ class JobRepository:
             mailcow_url=mailcow_url,
             mailcow_api_key=mailcow_api_key,
             dry_run=dry_run,
+            sync_calendar=sync_calendar,
+            sync_contacts=sync_contacts,
             status=JobStatus.PENDING
         )
     
@@ -95,6 +100,8 @@ class JobRepository:
             row_dict["source_ssl"] = bool(row_dict.get("source_ssl"))
             row_dict["target_ssl"] = bool(row_dict.get("target_ssl"))
             row_dict["dry_run"] = bool(row_dict.get("dry_run"))
+            row_dict["sync_calendar"] = bool(row_dict.get("sync_calendar"))
+            row_dict["sync_contacts"] = bool(row_dict.get("sync_contacts"))
             return Job(**row_dict)
         return None
     
@@ -129,6 +136,8 @@ class JobRepository:
             row_dict["source_ssl"] = bool(row_dict.get("source_ssl"))
             row_dict["target_ssl"] = bool(row_dict.get("target_ssl"))
             row_dict["dry_run"] = bool(row_dict.get("dry_run"))
+            row_dict["sync_calendar"] = bool(row_dict.get("sync_calendar"))
+            row_dict["sync_contacts"] = bool(row_dict.get("sync_contacts"))
             jobs.append(Job(**row_dict))
         return jobs
     

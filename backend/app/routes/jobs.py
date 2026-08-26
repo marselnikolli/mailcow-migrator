@@ -89,6 +89,8 @@ def _to_queue_job(job: JobCreate, tenant_id: int, db_job_id: int) -> dict:
         "mailcow_url": job.mailcow_url,
         "mailcow_api_key": job.mailcow_api_key,
         "dry_run": job.dry_run,
+        "sync_calendar": job.sync_calendar,
+        "sync_contacts": job.sync_contacts,
         "retry_count": 0
     }
 
@@ -113,6 +115,8 @@ def _job_to_queue_dict(job: Job, tenant_id: int) -> dict:
         "mailcow_url": job.mailcow_url,
         "mailcow_api_key": job.mailcow_api_key,
         "dry_run": job.dry_run,
+        "sync_calendar": job.sync_calendar,
+        "sync_contacts": job.sync_contacts,
         "retry_count": 0
     }
 
@@ -150,7 +154,9 @@ async def create_job(request: Request, job_data: JobCreate):
         target_ssl=job_data.target_server.ssl,
         mailcow_url=job_data.mailcow_url,
         mailcow_api_key=job_data.mailcow_api_key,
-        dry_run=job_data.dry_run
+        dry_run=job_data.dry_run,
+        sync_calendar=job_data.sync_calendar,
+        sync_contacts=job_data.sync_contacts
     )
 
     # Push to queue for processing
@@ -215,7 +221,9 @@ async def bulk_create_jobs(request: Request, bulk_data: BulkJobCreate):
             target_ssl=job_data.target_server.ssl,
             mailcow_url=job_data.mailcow_url,
             mailcow_api_key=job_data.mailcow_api_key,
-            dry_run=job_data.dry_run
+            dry_run=job_data.dry_run,
+            sync_calendar=job_data.sync_calendar,
+            sync_contacts=job_data.sync_contacts
         )
         queue.push_job(_to_queue_job(job_data, tenant_id, job.id))
         created.append({
@@ -260,6 +268,8 @@ async def list_jobs(request: Request, status: str = None, limit: int = 100, offs
             "target_type": job.target_type,
             "target_host": job.target_host,
             "dry_run": job.dry_run,
+            "sync_calendar": job.sync_calendar,
+            "sync_contacts": job.sync_contacts,
             "error_message": job.error_message,
             "created_at": job.created_at,
             "completed_at": job.completed_at
@@ -326,6 +336,10 @@ async def update_job(request: Request, job_id: int, update: JobUpdate):
         fields["mailcow_api_key"] = update.mailcow_api_key
     if update.dry_run is not None:
         fields["dry_run"] = int(update.dry_run)
+    if update.sync_calendar is not None:
+        fields["sync_calendar"] = int(update.sync_calendar)
+    if update.sync_contacts is not None:
+        fields["sync_contacts"] = int(update.sync_contacts)
 
     if not fields:
         raise HTTPException(status_code=400, detail="No fields to update")
@@ -419,6 +433,8 @@ async def get_job(request: Request, job_id: int):
         "target_ssl": job.target_ssl,
         "mailcow_url": job.mailcow_url,
         "dry_run": job.dry_run,
+        "sync_calendar": job.sync_calendar,
+        "sync_contacts": job.sync_contacts,
         "error_message": job.error_message,
         "created_at": job.created_at,
         "completed_at": job.completed_at

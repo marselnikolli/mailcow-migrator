@@ -63,6 +63,8 @@ class Job(BaseModel):
     mailcow_url: Optional[str] = None
     mailcow_api_key: Optional[str] = None
     dry_run: Optional[bool] = False
+    sync_calendar: Optional[bool] = False
+    sync_contacts: Optional[bool] = False
     status: JobStatus = JobStatus.PENDING
     progress: int = 0
     error_message: Optional[str] = None
@@ -106,6 +108,8 @@ class JobCreate(BaseModel):
     mailcow_url: str = None
     mailcow_api_key: str = None
     dry_run: bool = False
+    sync_calendar: bool = False
+    sync_contacts: bool = False
 
 class BulkJobCreate(BaseModel):
     jobs: List[JobCreate]
@@ -120,6 +124,8 @@ class JobUpdate(BaseModel):
     mailcow_url: Optional[str] = None
     mailcow_api_key: Optional[str] = None
     dry_run: Optional[bool] = None
+    sync_calendar: Optional[bool] = None
+    sync_contacts: Optional[bool] = None
 
 class ImportedAccount(BaseModel):
     email: str
@@ -139,6 +145,8 @@ class JobResponse(BaseModel):
     target_type: Optional[str] = "imap"
     target_host: Optional[str] = None
     dry_run: Optional[bool] = False
+    sync_calendar: Optional[bool] = False
+    sync_contacts: Optional[bool] = False
     error_message: Optional[str] = None
     created_at: datetime
     completed_at: Optional[datetime] = None

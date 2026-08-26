@@ -29,6 +29,8 @@ interface JobDetail {
   target_ssl: boolean | null
   mailcow_url: string | null
   dry_run: boolean
+  sync_calendar: boolean
+  sync_contacts: boolean
 }
 
 const EditJobDialog: React.FC<EditJobDialogProps> = ({ jobId, onOpenChange, onSaved }) => {
@@ -45,6 +47,8 @@ const EditJobDialog: React.FC<EditJobDialogProps> = ({ jobId, onOpenChange, onSa
   const [mailcowUrl, setMailcowUrl] = useState('')
   const [mailcowApiKey, setMailcowApiKey] = useState('')
   const [dryRun, setDryRun] = useState(false)
+  const [syncCalendar, setSyncCalendar] = useState(false)
+  const [syncContacts, setSyncContacts] = useState(false)
 
   useEffect(() => {
     if (jobId === null) return
@@ -64,6 +68,8 @@ const EditJobDialog: React.FC<EditJobDialogProps> = ({ jobId, onOpenChange, onSa
         setTargetSsl(job.target_ssl ?? true)
         setMailcowUrl(job.mailcow_url || '')
         setDryRun(!!job.dry_run)
+        setSyncCalendar(!!job.sync_calendar)
+        setSyncContacts(!!job.sync_contacts)
       })
       .catch(() => setError('Failed to load job details'))
       .finally(() => setLoading(false))
@@ -84,6 +90,8 @@ const EditJobDialog: React.FC<EditJobDialogProps> = ({ jobId, onOpenChange, onSa
         ssl: targetSsl,
       },
       dry_run: dryRun,
+      sync_calendar: syncCalendar,
+      sync_contacts: syncContacts,
     }
     if (targetPassword) payload.target_password = targetPassword
     if (targetType === 'mailcow') {
@@ -195,6 +203,22 @@ const EditJobDialog: React.FC<EditJobDialogProps> = ({ jobId, onOpenChange, onSa
                 <p className="text-xs text-muted-foreground">Test without transferring any data</p>
               </div>
               <Switch id="edit-dry-run" checked={dryRun} onCheckedChange={setDryRun} />
+            </div>
+
+            <div className="flex items-center justify-between rounded-lg border px-4 py-3">
+              <div>
+                <Label htmlFor="edit-sync-calendar">Calendar (CalDAV)</Label>
+                <p className="text-xs text-muted-foreground">Migrate the mailbox's calendar</p>
+              </div>
+              <Switch id="edit-sync-calendar" checked={syncCalendar} onCheckedChange={setSyncCalendar} />
+            </div>
+
+            <div className="flex items-center justify-between rounded-lg border px-4 py-3">
+              <div>
+                <Label htmlFor="edit-sync-contacts">Address book (CardDAV)</Label>
+                <p className="text-xs text-muted-foreground">Migrate the mailbox's contacts</p>
+              </div>
+              <Switch id="edit-sync-contacts" checked={syncContacts} onCheckedChange={setSyncContacts} />
             </div>
 
             <DialogFooter>

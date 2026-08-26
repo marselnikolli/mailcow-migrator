@@ -52,6 +52,8 @@ export interface JobCreatePayload {
   mailcow_url?: string
   mailcow_api_key?: string
   dry_run: boolean
+  sync_calendar: boolean
+  sync_contacts: boolean
 }
 
 export interface JobUpdatePayload {
@@ -62,6 +64,8 @@ export interface JobUpdatePayload {
   mailcow_url?: string
   mailcow_api_key?: string
   dry_run?: boolean
+  sync_calendar?: boolean
+  sync_contacts?: boolean
 }
 
 export interface ImportedAccount {

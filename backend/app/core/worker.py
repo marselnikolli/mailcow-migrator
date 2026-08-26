@@ -5,6 +5,7 @@ from app.core.queue import RedisQueue
 from app.core.imapsync import CANCELLED, ImapsyncWrapper
 from app.core.domains import DomainService
 from app.core.mailcow import MailcowClient
+from app.core.dav_sync import DavSyncer, DavSyncError
 from app.core.logger import StructuredLogger
 from app.repositories.job_repo import JobRepository
 from app.models import JobStatus
@@ -49,6 +50,8 @@ class MigrationWorker:
         mailcow_url = job.get("mailcow_url")
         mailcow_api_key = job.get("mailcow_api_key")
         dry_run = job.get("dry_run", False)
+        sync_calendar = job.get("sync_calendar", False)
+        sync_contacts = job.get("sync_contacts", False)
         secrets = [s for s in (source_password, target_password, mailcow_api_key) if s]
 
         try:
@@ -133,6 +136,33 @@ class MigrationWorker:
                 return False
 
             if success:
+                # Optional CalDAV/CardDAV migration (calendar + address book)
+                if sync_calendar or sync_contacts:
+                    if target_type != "mailcow":
+                        self.job_logger.log_info(job_id, "Skipping calendar/contacts sync: target is not a Mailcow/SOGo instance")
+                    else:
+                        self.job_logger.log_info(job_id, f"Starting calendar/contacts sync (calendar={sync_calendar}, contacts={sync_contacts})")
+                        dav = DavSyncer(
+                            source_email=source_email,
+                            source_password=source_password,
+                            source_host=source_host,
+                            source_ssl=source_ssl,
+                            target_email=target_email,
+                            target_password=target_password,
+                            target_host=target_host,
+                            target_ssl=target_ssl,
+                            on_log=on_log,
+                        )
+                        try:
+                            results = dav.run(
+                                sync_calendar=sync_calendar,
+                                sync_contacts=sync_contacts,
+                                dry_run=dry_run,
+                            )
+                            self.job_logger.log_info(job_id, f"Calendar/contacts sync done: {_redact(str(results), secrets)}")
+                        except DavSyncError as e:
+                            self.job_logger.log_error(job_id, f"Calendar/contacts sync failed: {_redact(str(e), secrets)}")
+
                 if dry_run:
                     self.job_logger.log_info(job_id, "Dry run completed successfully - no data was transferred")
                 else:

@@ -51,6 +51,8 @@ interface Job {
   target_type?: string
   target_host?: string
   dry_run?: boolean
+  sync_calendar?: boolean
+  sync_contacts?: boolean
 }
 
 type ConfirmKind = 'cancel' | 'delete'
@@ -107,6 +109,8 @@ const Jobs: React.FC = () => {
   const [mailcowUrl, setMailcowUrl] = useState('')
   const [mailcowApiKey, setMailcowApiKey] = useState('')
   const [dryRun, setDryRun] = useState(false)
+  const [syncCalendar, setSyncCalendar] = useState(false)
+  const [syncContacts, setSyncContacts] = useState(false)
 
   const fetchJobs = async () => {
     try {
@@ -193,6 +197,8 @@ const Jobs: React.FC = () => {
       mailcow_url: targetType === 'mailcow' ? mailcowUrl : undefined,
       mailcow_api_key: targetType === 'mailcow' ? mailcowApiKey : undefined,
       dry_run: dryRun,
+      sync_calendar: syncCalendar,
+      sync_contacts: syncContacts,
     }
   }
 
@@ -536,6 +542,30 @@ const Jobs: React.FC = () => {
                 </Label>
               </div>
 
+              <Separator />
+
+              {/* Data to migrate */}
+              <div className="space-y-3">
+                <p className="text-sm font-medium text-muted-foreground">Data to migrate</p>
+                <div className="flex items-center gap-2">
+                  <Checkbox id="syncCalendar" checked={syncCalendar} onCheckedChange={(v) => setSyncCalendar(!!v)} />
+                  <Label htmlFor="syncCalendar" className="cursor-pointer">
+                    Calendar (CalDAV)
+                  </Label>
+                </div>
+                <div className="flex items-center gap-2">
+                  <Checkbox id="syncContacts" checked={syncContacts} onCheckedChange={(v) => setSyncContacts(!!v)} />
+                  <Label htmlFor="syncContacts" className="cursor-pointer">
+                    Address book (CardDAV)
+                  </Label>
+                </div>
+                {targetType !== 'mailcow' && (syncCalendar || syncContacts) && (
+                  <p className="text-xs text-muted-foreground">
+                    Note: calendar/address book sync requires a Mailcow (API) destination.
+                  </p>
+                )}
+              </div>
+
               <div className="flex gap-3">
                 <Button type="submit" disabled={creating}>
                   <Play className="mr-2 h-4 w-4" />
@@ -595,6 +625,8 @@ const Jobs: React.FC = () => {
                       <TableCell className="text-sm text-muted-foreground">
                         {job.target_type === 'mailcow' ? 'Mailcow API' : (job.target_host || 'IMAP')}
                         {job.dry_run && <Badge variant="outline" className="ml-2">DRY RUN</Badge>}
+                        {job.sync_calendar && <Badge variant="outline" className="ml-2">Calendar</Badge>}
+                        {job.sync_contacts && <Badge variant="outline" className="ml-2">Contacts</Badge>}
                       </TableCell>
                       <TableCell><JobStatusBadge status={job.status} /></TableCell>
                       <TableCell className="text-sm text-muted-foreground">

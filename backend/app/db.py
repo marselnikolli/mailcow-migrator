@@ -102,6 +102,8 @@ def migrate_schema():
         "mailcow_url": "TEXT",
         "mailcow_api_key": "TEXT",
         "dry_run": "INTEGER DEFAULT 0",
+        "sync_calendar": "INTEGER DEFAULT 0",
+        "sync_contacts": "INTEGER DEFAULT 0",
     }
 
     for column, definition in migrations.items():
