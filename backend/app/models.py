@@ -65,6 +65,16 @@ class Job(BaseModel):
     dry_run: Optional[bool] = False
     sync_calendar: Optional[bool] = False
     sync_contacts: Optional[bool] = False
+    sync_tasks: Optional[bool] = False
+    last_run_at: Optional[datetime] = None
+    last_run_status: Optional[str] = None
+    run_count: Optional[int] = 0
+    folders: Optional[str] = None
+    maxage_days: Optional[int] = None
+    since_date: Optional[str] = None
+    enabled: Optional[bool] = False
+    schedule_interval_minutes: Optional[int] = None
+    next_run_at: Optional[datetime] = None
     status: JobStatus = JobStatus.PENDING
     progress: int = 0
     error_message: Optional[str] = None
@@ -110,6 +120,13 @@ class JobCreate(BaseModel):
     dry_run: bool = False
     sync_calendar: bool = False
     sync_contacts: bool = False
+    sync_tasks: bool = False
+    folders: Optional[str] = None
+    maxage_days: Optional[int] = None
+    since_date: Optional[str] = None
+    enabled: Optional[bool] = False
+    schedule_interval_minutes: Optional[int] = None
+    next_run_at: Optional[datetime] = None
 
 class BulkJobCreate(BaseModel):
     jobs: List[JobCreate]
@@ -126,6 +143,13 @@ class JobUpdate(BaseModel):
     dry_run: Optional[bool] = None
     sync_calendar: Optional[bool] = None
     sync_contacts: Optional[bool] = None
+    sync_tasks: Optional[bool] = None
+    folders: Optional[str] = None
+    maxage_days: Optional[int] = None
+    since_date: Optional[str] = None
+    enabled: Optional[bool] = None
+    schedule_interval_minutes: Optional[int] = None
+    next_run_at: Optional[datetime] = None
 
 class ImportedAccount(BaseModel):
     email: str
@@ -147,6 +171,10 @@ class JobResponse(BaseModel):
     dry_run: Optional[bool] = False
     sync_calendar: Optional[bool] = False
     sync_contacts: Optional[bool] = False
+    sync_tasks: Optional[bool] = False
+    folders: Optional[str] = None
+    maxage_days: Optional[int] = None
+    since_date: Optional[str] = None
     error_message: Optional[str] = None
     created_at: datetime
     completed_at: Optional[datetime] = None

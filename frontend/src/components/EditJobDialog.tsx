@@ -31,6 +31,12 @@ interface JobDetail {
   dry_run: boolean
   sync_calendar: boolean
   sync_contacts: boolean
+  sync_tasks: boolean
+  folders?: string | null
+  maxage_days?: number | null
+  since_date?: string | null
+  enabled?: boolean | null
+  schedule_interval_minutes?: number | null
 }
 
 const EditJobDialog: React.FC<EditJobDialogProps> = ({ jobId, onOpenChange, onSaved }) => {
@@ -49,6 +55,12 @@ const EditJobDialog: React.FC<EditJobDialogProps> = ({ jobId, onOpenChange, onSa
   const [dryRun, setDryRun] = useState(false)
   const [syncCalendar, setSyncCalendar] = useState(false)
   const [syncContacts, setSyncContacts] = useState(false)
+  const [syncTasks, setSyncTasks] = useState(false)
+  const [folders, setFolders] = useState('')
+  const [maxageDays, setMaxageDays] = useState('')
+  const [sinceDate, setSinceDate] = useState('')
+  const [scheduleEnabled, setScheduleEnabled] = useState(false)
+  const [scheduleInterval, setScheduleInterval] = useState('60')
 
   useEffect(() => {
     if (jobId === null) return
@@ -70,6 +82,12 @@ const EditJobDialog: React.FC<EditJobDialogProps> = ({ jobId, onOpenChange, onSa
         setDryRun(!!job.dry_run)
         setSyncCalendar(!!job.sync_calendar)
         setSyncContacts(!!job.sync_contacts)
+        setSyncTasks(!!job.sync_tasks)
+        setFolders(job.folders || '')
+        setMaxageDays(job.maxage_days != null ? String(job.maxage_days) : '')
+        setSinceDate(job.since_date || '')
+        setScheduleEnabled(!!job.enabled)
+        setScheduleInterval(job.schedule_interval_minutes != null ? String(job.schedule_interval_minutes) : '60')
       })
       .catch(() => setError('Failed to load job details'))
       .finally(() => setLoading(false))
@@ -92,6 +110,12 @@ const EditJobDialog: React.FC<EditJobDialogProps> = ({ jobId, onOpenChange, onSa
       dry_run: dryRun,
       sync_calendar: syncCalendar,
       sync_contacts: syncContacts,
+      sync_tasks: syncTasks,
+      folders: folders.trim() || undefined,
+      maxage_days: maxageDays ? Number(maxageDays) : undefined,
+      since_date: sinceDate || undefined,
+      enabled: scheduleEnabled,
+      schedule_interval_minutes: scheduleEnabled && scheduleInterval ? Number(scheduleInterval) : undefined,
     }
     if (targetPassword) payload.target_password = targetPassword
     if (targetType === 'mailcow') {
@@ -220,6 +244,62 @@ const EditJobDialog: React.FC<EditJobDialogProps> = ({ jobId, onOpenChange, onSa
               </div>
               <Switch id="edit-sync-contacts" checked={syncContacts} onCheckedChange={setSyncContacts} />
             </div>
+            <div className="flex items-center justify-between rounded-lg border px-4 py-3">
+              <div>
+                <Label htmlFor="edit-sync-tasks">Tasks (CalDAV VTODO)</Label>
+                <p className="text-xs text-muted-foreground">Migrate the mailbox's tasks</p>
+              </div>
+              <Switch id="edit-sync-tasks" checked={syncTasks} onCheckedChange={setSyncTasks} />
+            </div>
+
+            <div className="space-y-1.5">
+              <Label>Folders (comma-separated, empty = all)</Label>
+              <Input
+                value={folders}
+                onChange={(e) => setFolders(e.target.value)}
+                placeholder="INBOX,Sent,Archive"
+              />
+            </div>
+            <div className="grid grid-cols-2 gap-4">
+              <div className="space-y-1.5">
+                <Label>Only last N days</Label>
+                <Input
+                  type="number"
+                  min="1"
+                  value={maxageDays}
+                  onChange={(e) => setMaxageDays(e.target.value)}
+                  placeholder="e.g. 30"
+                />
+              </div>
+              <div className="space-y-1.5">
+                <Label>Since date</Label>
+                <Input
+                  type="date"
+                  value={sinceDate}
+                  onChange={(e) => setSinceDate(e.target.value)}
+                />
+              </div>
+            </div>
+
+            <div className="flex items-center justify-between rounded-lg border px-4 py-3">
+              <div>
+                <Label htmlFor="edit-schedule-enabled">Recurring delta sync</Label>
+                <p className="text-xs text-muted-foreground">Re-run this job on a schedule</p>
+              </div>
+              <Switch id="edit-schedule-enabled" checked={scheduleEnabled} onCheckedChange={setScheduleEnabled} />
+            </div>
+            {scheduleEnabled && (
+              <div className="space-y-1.5">
+                <Label>Run every (minutes)</Label>
+                <Input
+                  type="number"
+                  min="5"
+                  value={scheduleInterval}
+                  onChange={(e) => setScheduleInterval(e.target.value)}
+                  placeholder="e.g. 60"
+                />
+              </div>
+            )}
 
             <DialogFooter>
               <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>

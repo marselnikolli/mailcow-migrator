@@ -12,6 +12,11 @@ class Settings:
     # Redis configuration
     REDIS_URL: str = os.getenv("REDIS_URL", "redis://localhost:6379")
 
+    # Job lock lifetime in seconds. A job held for longer than this (e.g. a
+    # very large migration) can be picked up again by another worker, which is
+    # safe because imapsync is idempotent. Default 12h.
+    JOB_LOCK_TIMEOUT: int = int(os.getenv("JOB_LOCK_TIMEOUT", "43200"))
+
     # Application
     DEBUG: bool = os.getenv("DEBUG", "False").lower() == "true"
 

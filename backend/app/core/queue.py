@@ -5,11 +5,12 @@ from app.config import settings
 import uuid
 
 class RedisQueue:
-    def __init__(self):
+    def __init__(self, lock_timeout: int = 3600):
         self.redis_client = redis.from_url(settings.REDIS_URL)
         self.queue_key = "mailcow:jobs:queue"
         self.processing_key = "mailcow:jobs:processing"
-    
+        self.lock_timeout = lock_timeout
+
     def push_job(self, job: Dict[str, Any]) -> str:
         """Push a job to the queue."""
         job_id = str(uuid.uuid4())
@@ -30,15 +31,16 @@ class RedisQueue:
         job_id = job.get("job_id")
         lock_key = f"mailcow:lock:{job_id}"
         
-        # Set lock with 1 hour expiry
-        self.redis_client.setex(lock_key, 3600, "1")
+        # Set lock with configurable expiry
+        self.redis_client.setex(lock_key, self.lock_timeout, "1")
         
         return job
     
     def acquire_job_lock(self, job_id: str, timeout: int = 3600) -> bool:
-        """Try to acquire lock on job."""
+        """Try to acquire lock on job. Uses the instance lock_timeout when the
+        caller does not pass an explicit timeout."""
         lock_key = f"mailcow:lock:{job_id}"
-        return bool(self.redis_client.setex(lock_key, timeout, "1"))
+        return bool(self.redis_client.setex(lock_key, timeout or self.lock_timeout, "1"))
     
     def release_job_lock(self, job_id: str) -> None:
         """Release lock on job."""

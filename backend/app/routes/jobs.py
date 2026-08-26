@@ -1,18 +1,24 @@
 from fastapi import APIRouter, Request, HTTPException, Depends, File, UploadFile
+from fastapi.responses import Response
 from pydantic import BaseModel
 from typing import List
 from urllib.parse import urlparse
 from app.repositories.job_repo import JobRepository
 from app.models import JobStatus, JobCreate, JobResponse, BulkJobCreate, ImportedAccount, JobUpdate, Job
 from app.core.queue import RedisQueue
+from app.core.report import build_report, report_to_csv
+from app.core.estimate import MailboxEstimator
+from app.core.autodiscover import discover_imap_host
 from app.core.import_parser import parse_import
 from app.core.security import UnsafeUrlError, validate_public_url
+from app.core.secrets import SecretEncryptor
 from app.core.domains import DomainService
 from app.core.mailcow import MailcowClient
 from app.deps.roles import get_current_user
 
 router = APIRouter(dependencies=[Depends(get_current_user)])
 queue = RedisQueue()
+_secrets = SecretEncryptor()
 
 
 def _validate_job_targets(job: JobCreate) -> None:
@@ -76,9 +82,9 @@ def _to_queue_job(job: JobCreate, tenant_id: int, db_job_id: int) -> dict:
         "id": db_job_id,
         "tenant_id": tenant_id,
         "source_email": job.source_email,
-        "source_password": job.source_password,
+        "source_password": _secrets.encrypt(job.source_password),
         "target_email": job.target_email,
-        "target_password": job.target_password,
+        "target_password": _secrets.encrypt(job.target_password),
         "source_host": job.source_server.host,
         "source_port": job.source_server.port,
         "source_ssl": job.source_server.ssl,
@@ -87,10 +93,16 @@ def _to_queue_job(job: JobCreate, tenant_id: int, db_job_id: int) -> dict:
         "target_port": job.target_server.port,
         "target_ssl": job.target_server.ssl,
         "mailcow_url": job.mailcow_url,
-        "mailcow_api_key": job.mailcow_api_key,
+        "mailcow_api_key": _secrets.encrypt(job.mailcow_api_key or ""),
         "dry_run": job.dry_run,
         "sync_calendar": job.sync_calendar,
         "sync_contacts": job.sync_contacts,
+        "sync_tasks": job.sync_tasks,
+        "folders": job.folders,
+        "maxage_days": job.maxage_days,
+        "since_date": job.since_date,
+        "enabled": job.enabled,
+        "schedule_interval_minutes": job.schedule_interval_minutes,
         "retry_count": 0
     }
 
@@ -102,9 +114,9 @@ def _job_to_queue_dict(job: Job, tenant_id: int) -> dict:
         "id": job.id,
         "tenant_id": tenant_id,
         "source_email": job.source_email,
-        "source_password": job.source_password or "",
+        "source_password": _secrets.encrypt(job.source_password or ""),
         "target_email": job.target_email,
-        "target_password": job.target_password or "",
+        "target_password": _secrets.encrypt(job.target_password or ""),
         "source_host": job.source_host,
         "source_port": job.source_port,
         "source_ssl": job.source_ssl,
@@ -113,10 +125,16 @@ def _job_to_queue_dict(job: Job, tenant_id: int) -> dict:
         "target_port": job.target_port,
         "target_ssl": job.target_ssl,
         "mailcow_url": job.mailcow_url,
-        "mailcow_api_key": job.mailcow_api_key,
+        "mailcow_api_key": _secrets.encrypt(job.mailcow_api_key or ""),
         "dry_run": job.dry_run,
         "sync_calendar": job.sync_calendar,
         "sync_contacts": job.sync_contacts,
+        "sync_tasks": job.sync_tasks,
+        "folders": job.folders,
+        "maxage_days": job.maxage_days,
+        "since_date": job.since_date,
+        "enabled": job.enabled,
+        "schedule_interval_minutes": job.schedule_interval_minutes,
         "retry_count": 0
     }
 
@@ -156,7 +174,13 @@ async def create_job(request: Request, job_data: JobCreate):
         mailcow_api_key=job_data.mailcow_api_key,
         dry_run=job_data.dry_run,
         sync_calendar=job_data.sync_calendar,
-        sync_contacts=job_data.sync_contacts
+        sync_contacts=job_data.sync_contacts,
+        sync_tasks=job_data.sync_tasks,
+        folders=job_data.folders,
+        maxage_days=job_data.maxage_days,
+        since_date=job_data.since_date,
+        enabled=job_data.enabled,
+        schedule_interval_minutes=job_data.schedule_interval_minutes
     )
 
     # Push to queue for processing
@@ -223,7 +247,13 @@ async def bulk_create_jobs(request: Request, bulk_data: BulkJobCreate):
             mailcow_api_key=job_data.mailcow_api_key,
             dry_run=job_data.dry_run,
             sync_calendar=job_data.sync_calendar,
-            sync_contacts=job_data.sync_contacts
+            sync_contacts=job_data.sync_contacts,
+            sync_tasks=job_data.sync_tasks,
+            folders=job_data.folders,
+            maxage_days=job_data.maxage_days,
+            since_date=job_data.since_date,
+            enabled=job_data.enabled,
+            schedule_interval_minutes=job_data.schedule_interval_minutes
         )
         queue.push_job(_to_queue_job(job_data, tenant_id, job.id))
         created.append({
@@ -270,6 +300,15 @@ async def list_jobs(request: Request, status: str = None, limit: int = 100, offs
             "dry_run": job.dry_run,
             "sync_calendar": job.sync_calendar,
             "sync_contacts": job.sync_contacts,
+            "sync_tasks": job.sync_tasks,
+            "last_run_at": job.last_run_at,
+            "last_run_status": job.last_run_status,
+            "run_count": job.run_count,
+            "folders": job.folders,
+            "maxage_days": job.maxage_days,
+            "since_date": job.since_date,
+            "enabled": job.enabled,
+            "schedule_interval_minutes": job.schedule_interval_minutes,
             "error_message": job.error_message,
             "created_at": job.created_at,
             "completed_at": job.completed_at
@@ -312,7 +351,7 @@ async def update_job(request: Request, job_id: int, update: JobUpdate):
     if update.target_email is not None:
         fields["target_email"] = update.target_email.strip() or job.source_email
     if update.target_password is not None:
-        fields["target_password"] = update.target_password
+        fields["target_password"] = _secrets.encrypt(update.target_password)
     if update.target_type is not None:
         fields["target_type"] = update.target_type
     if update.mailcow_url is not None:
@@ -333,13 +372,25 @@ async def update_job(request: Request, job_id: int, update: JobUpdate):
         fields["target_port"] = update.target_server.port
         fields["target_ssl"] = int(update.target_server.ssl)
     if update.mailcow_api_key is not None:
-        fields["mailcow_api_key"] = update.mailcow_api_key
+        fields["mailcow_api_key"] = _secrets.encrypt(update.mailcow_api_key)
     if update.dry_run is not None:
         fields["dry_run"] = int(update.dry_run)
     if update.sync_calendar is not None:
         fields["sync_calendar"] = int(update.sync_calendar)
     if update.sync_contacts is not None:
         fields["sync_contacts"] = int(update.sync_contacts)
+    if update.sync_tasks is not None:
+        fields["sync_tasks"] = int(update.sync_tasks)
+    if update.folders is not None:
+        fields["folders"] = update.folders
+    if update.maxage_days is not None:
+        fields["maxage_days"] = update.maxage_days
+    if update.since_date is not None:
+        fields["since_date"] = update.since_date
+    if update.enabled is not None:
+        fields["enabled"] = int(update.enabled)
+    if update.schedule_interval_minutes is not None:
+        fields["schedule_interval_minutes"] = update.schedule_interval_minutes
 
     if not fields:
         raise HTTPException(status_code=400, detail="No fields to update")
@@ -435,7 +486,94 @@ async def get_job(request: Request, job_id: int):
         "dry_run": job.dry_run,
         "sync_calendar": job.sync_calendar,
         "sync_contacts": job.sync_contacts,
+        "sync_tasks": job.sync_tasks,
+        "last_run_at": job.last_run_at,
+        "last_run_status": job.last_run_status,
+        "run_count": job.run_count,
+        "folders": job.folders,
+        "maxage_days": job.maxage_days,
+        "since_date": job.since_date,
+        "enabled": job.enabled,
+        "schedule_interval_minutes": job.schedule_interval_minutes,
         "error_message": job.error_message,
         "created_at": job.created_at,
         "completed_at": job.completed_at
     }
+
+
+@router.get("/{job_id}/report")
+async def get_job_report(request: Request, job_id: int):
+    """Get a structured migration report for a job, parsed from its log."""
+    tenant_id = request.state.tenant_id
+    job = JobRepository.get_job_by_id(job_id, tenant_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    log = queue.get_job_log(job_id)
+    report = build_report(job_id, log, job_meta={
+        "source_email": job.source_email,
+        "target_email": job.target_email,
+        "status": job.status.value,
+        "run_count": job.run_count,
+        "last_run_status": job.last_run_status,
+    })
+    return report
+
+
+@router.get("/{job_id}/report.csv")
+async def get_job_report_csv(request: Request, job_id: int):
+    """Export a job's migration report as CSV."""
+    tenant_id = request.state.tenant_id
+    job = JobRepository.get_job_by_id(job_id, tenant_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    log = queue.get_job_log(job_id)
+    report = build_report(job_id, log, job_meta={
+        "source_email": job.source_email,
+        "target_email": job.target_email,
+    })
+    csv_data = report_to_csv(report)
+    return Response(
+        content=csv_data,
+        media_type="text/csv",
+        headers={
+            "Content-Disposition": f'attachment; filename="job-{job_id}-report.csv"'
+        },
+    )
+
+
+@router.get("/{job_id}/estimate")
+async def get_job_estimate(request: Request, job_id: int):
+    """Connect to the source and estimate mailbox size / folder counts without
+    transferring anything. Useful before a real migration to size the target."""
+    tenant_id = request.state.tenant_id
+    job = JobRepository.get_job_by_id(job_id, tenant_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    try:
+        estimator = MailboxEstimator(
+            host=job.source_host or "",
+            email=job.source_email,
+            password=job.source_password,
+            port=job.source_port or 993,
+            use_ssl=job.source_ssl,
+        )
+        estimate = estimator.estimate(folders=job.folders)
+        return estimate
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Estimate failed: {str(e)}")
+
+
+@router.get("/autodiscover/{email}")
+async def autodiscover_source(request: Request, email: str):
+    """Probe the source domain for a reachable IMAP server (SRV, common
+    hostnames, MX). Returns the discovered host/port or the default."""
+    from app.config import settings
+    host, port = discover_imap_host(
+        email,
+        default_host=settings.SOURCE_IMAP_HOST,
+        default_port=settings.SOURCE_IMAP_PORT,
+    )
+    return {"email": email, "host": host, "port": port}

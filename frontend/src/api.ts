@@ -54,6 +54,12 @@ export interface JobCreatePayload {
   dry_run: boolean
   sync_calendar: boolean
   sync_contacts: boolean
+  sync_tasks: boolean
+  folders?: string
+  maxage_days?: number
+  since_date?: string
+  enabled?: boolean
+  schedule_interval_minutes?: number
 }
 
 export interface JobUpdatePayload {
@@ -66,6 +72,12 @@ export interface JobUpdatePayload {
   dry_run?: boolean
   sync_calendar?: boolean
   sync_contacts?: boolean
+  sync_tasks?: boolean
+  folders?: string
+  maxage_days?: number
+  since_date?: string
+  enabled?: boolean
+  schedule_interval_minutes?: number
 }
 
 export interface ImportedAccount {
@@ -105,6 +117,12 @@ export const jobsApi = {
     api.post(`/jobs/${jobId}/cancel`),
   deleteJob: (jobId: number) =>
     api.delete(`/jobs/${jobId}`),
+  getJobReport: (jobId: number) =>
+    api.get(`/jobs/${jobId}/report`),
+  downloadJobReportCsv: (jobId: number) =>
+    api.get(`/jobs/${jobId}/report.csv`, { responseType: 'blob' }),
+  getJobEstimate: (jobId: number) =>
+    api.get(`/jobs/${jobId}/estimate`),
 }
 
 export const domainsApi = {

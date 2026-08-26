@@ -33,7 +33,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog'
-import { Upload, Plus, Trash2, RefreshCw, Play, MoreHorizontal, Pencil, Ban } from 'lucide-react'
+import { Upload, Plus, Trash2, RefreshCw, Play, MoreHorizontal, Pencil, Ban, Download, Gauge } from 'lucide-react'
 import LiveLogs from '../components/LiveLogs'
 import ImportModal from '../components/ImportModal'
 import EditJobDialog from '../components/EditJobDialog'
@@ -53,6 +53,12 @@ interface Job {
   dry_run?: boolean
   sync_calendar?: boolean
   sync_contacts?: boolean
+  sync_tasks?: boolean
+  last_run_at?: string | null
+  last_run_status?: string | null
+  run_count?: number
+  enabled?: boolean
+  schedule_interval_minutes?: number | null
 }
 
 type ConfirmKind = 'cancel' | 'delete'
@@ -111,6 +117,12 @@ const Jobs: React.FC = () => {
   const [dryRun, setDryRun] = useState(false)
   const [syncCalendar, setSyncCalendar] = useState(false)
   const [syncContacts, setSyncContacts] = useState(false)
+  const [syncTasks, setSyncTasks] = useState(false)
+  const [folders, setFolders] = useState('')
+  const [maxageDays, setMaxageDays] = useState('')
+  const [sinceDate, setSinceDate] = useState('')
+  const [scheduleEnabled, setScheduleEnabled] = useState(false)
+  const [scheduleInterval, setScheduleInterval] = useState('60')
 
   const fetchJobs = async () => {
     try {
@@ -199,6 +211,12 @@ const Jobs: React.FC = () => {
       dry_run: dryRun,
       sync_calendar: syncCalendar,
       sync_contacts: syncContacts,
+      sync_tasks: syncTasks,
+      folders: folders.trim() || undefined,
+      maxage_days: maxageDays ? Number(maxageDays) : undefined,
+      since_date: sinceDate || undefined,
+      enabled: scheduleEnabled,
+      schedule_interval_minutes: scheduleEnabled && scheduleInterval ? Number(scheduleInterval) : undefined,
     }
   }
 
@@ -257,6 +275,39 @@ const Jobs: React.FC = () => {
       setTimeout(fetchJobs, 1000)
     } catch (error: any) {
       setCreateError(error.response?.data?.detail || 'Failed to retry job')
+    }
+  }
+
+  const handleDownloadReport = async (jobId: number, sourceEmail: string, targetEmail: string) => {
+    try {
+      const response = await jobsApi.downloadJobReportCsv(jobId)
+      const url = URL.createObjectURL(new Blob([response.data]))
+      const link = document.createElement('a')
+      link.href = url
+      link.download = `${sourceEmail}-${targetEmail}-report.csv`.replace(/[@/\\]/g, '_')
+      document.body.appendChild(link)
+      link.click()
+      document.body.removeChild(link)
+      URL.revokeObjectURL(url)
+    } catch (error: any) {
+      setCreateError(error.response?.data?.detail || 'Failed to download report')
+    }
+  }
+
+  const handleEstimate = async (jobId: number, sourceEmail: string) => {
+    setActionPending(true)
+    setActionError('')
+    try {
+      const res = await jobsApi.getJobEstimate(jobId)
+      const est = res.data
+      const lines = est.folders
+        .map((f: { folder: string; messages: number }) => `${f.folder}: ${f.messages} msg`)
+        .join('\n')
+      setCreateSuccess(`Estimate for ${sourceEmail}: ${est.total_messages} total messages\n${lines}`)
+    } catch (error: any) {
+      setActionError(error.response?.data?.detail || 'Estimate failed')
+    } finally {
+      setActionPending(false)
     }
   }
 
@@ -559,10 +610,86 @@ const Jobs: React.FC = () => {
                     Address book (CardDAV)
                   </Label>
                 </div>
-                {targetType !== 'mailcow' && (syncCalendar || syncContacts) && (
+                <div className="flex items-center gap-2">
+                  <Checkbox id="syncTasks" checked={syncTasks} onCheckedChange={(v) => setSyncTasks(!!v)} />
+                  <Label htmlFor="syncTasks" className="cursor-pointer">
+                    Tasks (CalDAV VTODO)
+                  </Label>
+                </div>
+                {targetType !== 'mailcow' && (syncCalendar || syncContacts || syncTasks) && (
                   <p className="text-xs text-muted-foreground">
-                    Note: calendar/address book sync requires a Mailcow (API) destination.
+                    Note: calendar/address book/tasks sync requires a Mailcow (API) destination.
                   </p>
+                )}
+              </div>
+
+              <Separator />
+
+              {/* Folder / date filters */}
+              <div className="space-y-3">
+                <p className="text-sm font-medium text-muted-foreground">Filters</p>
+                <div>
+                  <Label htmlFor="folders" className={labelCls}>
+                    Folders to migrate (comma-separated, empty = all)
+                  </Label>
+                  <Input
+                    id="folders"
+                    type="text"
+                    value={folders}
+                    onChange={(e) => setFolders(e.target.value)}
+                    className={inputCls}
+                    placeholder="INBOX,Sent,Archive"
+                  />
+                </div>
+                <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                  <div>
+                    <Label htmlFor="maxageDays" className={labelCls}>
+                      Only last N days (empty = all)
+                    </Label>
+                    <Input
+                      id="maxageDays"
+                      type="number"
+                      min="1"
+                      value={maxageDays}
+                      onChange={(e) => setMaxageDays(e.target.value)}
+                      className={inputCls}
+                      placeholder="e.g. 30"
+                    />
+                  </div>
+                  <div>
+                    <Label htmlFor="sinceDate" className={labelCls}>
+                      Since date (YYYY-MM-DD)
+                    </Label>
+                    <Input
+                      id="sinceDate"
+                      type="date"
+                      value={sinceDate}
+                      onChange={(e) => setSinceDate(e.target.value)}
+                      className={inputCls}
+                    />
+                  </div>
+                </div>
+                <div className="flex items-center gap-2">
+                  <Checkbox id="scheduleEnabled" checked={scheduleEnabled} onCheckedChange={(v) => setScheduleEnabled(!!v)} />
+                  <Label htmlFor="scheduleEnabled" className="cursor-pointer">
+                    Recurring delta sync
+                  </Label>
+                </div>
+                {scheduleEnabled && (
+                  <div>
+                    <Label htmlFor="scheduleInterval" className={labelCls}>
+                      Run every (minutes)
+                    </Label>
+                    <Input
+                      id="scheduleInterval"
+                      type="number"
+                      min="5"
+                      value={scheduleInterval}
+                      onChange={(e) => setScheduleInterval(e.target.value)}
+                      className={inputCls}
+                      placeholder="e.g. 60"
+                    />
+                  </div>
                 )}
               </div>
 
@@ -627,6 +754,9 @@ const Jobs: React.FC = () => {
                         {job.dry_run && <Badge variant="outline" className="ml-2">DRY RUN</Badge>}
                         {job.sync_calendar && <Badge variant="outline" className="ml-2">Calendar</Badge>}
                         {job.sync_contacts && <Badge variant="outline" className="ml-2">Contacts</Badge>}
+                        {job.sync_tasks && <Badge variant="outline" className="ml-2">Tasks</Badge>}
+                        {!!job.run_count && <Badge variant="outline" className="ml-2">Run {job.run_count}</Badge>}
+                        {job.enabled && <Badge variant="outline" className="ml-2">Every {job.schedule_interval_minutes}m</Badge>}
                       </TableCell>
                       <TableCell><JobStatusBadge status={job.status} /></TableCell>
                       <TableCell className="text-sm text-muted-foreground">
@@ -653,6 +783,16 @@ const Jobs: React.FC = () => {
                                 Retry
                               </DropdownMenuItem>
                             )}
+                            {(job.status === 'completed' || job.status === 'failed' || job.status === 'cancelled') && (
+                              <DropdownMenuItem onClick={() => handleDownloadReport(job.id, job.source_email, job.target_email)}>
+                                <Download className="mr-2 h-4 w-4" />
+                                Download report (CSV)
+                              </DropdownMenuItem>
+                            )}
+                            <DropdownMenuItem onClick={() => handleEstimate(job.id, job.source_email)}>
+                              <Gauge className="mr-2 h-4 w-4" />
+                              Estimate mailbox size
+                            </DropdownMenuItem>
                             {(job.status === 'pending' || job.status === 'running') && (
                               <DropdownMenuItem onClick={() => setConfirmJob({ job, kind: 'cancel' })}>
                                 <Ban className="mr-2 h-4 w-4" />

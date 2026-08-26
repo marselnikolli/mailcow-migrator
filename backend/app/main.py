@@ -1,5 +1,6 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import PlainTextResponse
 from contextlib import asynccontextmanager
 
 # Import routers
@@ -7,13 +8,15 @@ from app.routes import auth, jobs, domains, logs
 from app.config import settings
 
 # Database initialization
-from app.db import init_db, migrate_schema
+from app.db import init_db, migrate_schema, backfill_encrypted_secrets
+from app.core.metrics import render_metrics
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Startup
     init_db()
     migrate_schema()
+    backfill_encrypted_secrets()
     yield
     # Shutdown
     pass
@@ -36,6 +39,11 @@ app.add_middleware(
 @app.get("/health")
 async def health_check():
     return {"status": "ok"}
+
+# Prometheus metrics endpoint (exposition text format)
+@app.get("/metrics", response_class=PlainTextResponse)
+async def metrics():
+    return render_metrics()
 
 # Register routers
 app.include_router(auth.router, prefix="/api/v1/auth", tags=["auth"])

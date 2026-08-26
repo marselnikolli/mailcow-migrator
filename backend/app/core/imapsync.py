@@ -12,7 +12,8 @@ class ImapsyncWrapper:
                    target_password: str, source_host: str = None, source_port: int = 993,
                    source_ssl: bool = True, target_host: str = "localhost",
                    target_port: int = 993, target_ssl: bool = True,
-                   dry_run: bool = False) -> list:
+                   dry_run: bool = False, folders: str = None,
+                   maxage_days: int = None, since_date: str = None) -> list:
         """Build the imapsync command."""
         cmd = [
             "imapsync",
@@ -30,6 +31,13 @@ class ImapsyncWrapper:
         ]
         if dry_run:
             cmd.append("--dry")
+        if folders:
+            for folder in [f.strip() for f in folders.split(",") if f.strip()]:
+                cmd.append(f"--include={folder}")
+        if maxage_days:
+            cmd.append(f"--maxage={int(maxage_days)}")
+        if since_date:
+            cmd.append(f"--since={since_date}")
         return cmd
 
     @staticmethod
@@ -37,7 +45,8 @@ class ImapsyncWrapper:
                  target_password: str, source_host: str = None, source_port: int = 993,
                  source_ssl: bool = True, target_host: str = "localhost",
                  target_port: int = 993, target_ssl: bool = True,
-                 dry_run: bool = False) -> Tuple[bool, str]:
+                 dry_run: bool = False, folders: str = None,
+                 maxage_days: int = None, since_date: str = None) -> Tuple[bool, str]:
         """
         Run imapsync to migrate emails.
 
@@ -49,7 +58,8 @@ class ImapsyncWrapper:
                 source_email, source_password, target_email, target_password,
                 source_host=source_host, source_port=source_port, source_ssl=source_ssl,
                 target_host=target_host, target_port=target_port, target_ssl=target_ssl,
-                dry_run=dry_run
+                dry_run=dry_run, folders=folders, maxage_days=maxage_days,
+                since_date=since_date,
             )
             
             # Run command
@@ -82,6 +92,8 @@ class ImapsyncWrapper:
                              source_port: int = 993, source_ssl: bool = True,
                              target_host: str = "localhost", target_port: int = 993,
                              target_ssl: bool = True, dry_run: bool = False,
+                             folders: str = None, maxage_days: int = None,
+                             since_date: str = None,
                              should_cancel: Optional[Callable[[], bool]] = None) -> Tuple[bool, str]:
         """
         Run imapsync with logging callback for real-time output.
@@ -95,7 +107,8 @@ class ImapsyncWrapper:
                 source_email, source_password, target_email, target_password,
                 source_host=source_host, source_port=source_port, source_ssl=source_ssl,
                 target_host=target_host, target_port=target_port, target_ssl=target_ssl,
-                dry_run=dry_run
+                dry_run=dry_run, folders=folders, maxage_days=maxage_days,
+                since_date=since_date,
             )
 
             output_lines = []

@@ -1,9 +1,12 @@
 from typing import List, Optional
 from app.db import get_db, dict_from_row
 from app.models import Job, JobStatus
+from app.core.secrets import SecretEncryptor
 from datetime import datetime
 
 class JobRepository:
+    _secrets = SecretEncryptor()
+
     @staticmethod
     def create_job(tenant_id: int, source_email: str, target_email: str,
                    source_password: str = "", target_password: str = "",
@@ -12,8 +15,13 @@ class JobRepository:
                    target_port: int = 993, target_ssl: bool = True,
                    mailcow_url: str = None, mailcow_api_key: str = None,
                    dry_run: bool = False,
-                   sync_calendar: bool = False, sync_contacts: bool = False) -> Job:
-        """Create a new job."""
+                   sync_calendar: bool = False, sync_contacts: bool = False,
+                   sync_tasks: bool = False,
+                   folders: str = None, maxage_days: int = None,
+                   since_date: str = None,
+                   enabled: bool = False, schedule_interval_minutes: int = None,
+                   next_run_at=None) -> Job:
+        """Create a new job. Secrets are encrypted before being stored."""
         conn = get_db()
         cursor = conn.cursor()
         
@@ -24,17 +32,23 @@ class JobRepository:
                 source_host, source_port, source_ssl,
                 target_type, target_host, target_port, target_ssl,
                 mailcow_url, mailcow_api_key, dry_run,
-                sync_calendar, sync_contacts,
+                sync_calendar, sync_contacts, sync_tasks,
+                folders, maxage_days, since_date,
+                enabled, schedule_interval_minutes, next_run_at,
                 status
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             tenant_id, source_email, target_email,
-            source_password, target_password,
+            JobRepository._secrets.encrypt(source_password),
+            JobRepository._secrets.encrypt(target_password),
             source_host, source_port, int(source_ssl),
             target_type, target_host, target_port, int(target_ssl),
-            mailcow_url, mailcow_api_key, int(dry_run),
-            int(sync_calendar), int(sync_contacts),
+            mailcow_url, JobRepository._secrets.encrypt(mailcow_api_key),
+            int(dry_run),
+            int(sync_calendar), int(sync_contacts), int(sync_tasks),
+            folders, maxage_days, since_date,
+            int(enabled), schedule_interval_minutes, next_run_at,
             JobStatus.PENDING.value
         ))
         
@@ -61,6 +75,13 @@ class JobRepository:
             dry_run=dry_run,
             sync_calendar=sync_calendar,
             sync_contacts=sync_contacts,
+            sync_tasks=sync_tasks,
+            folders=folders,
+            maxage_days=maxage_days,
+            since_date=since_date,
+            enabled=enabled,
+            schedule_interval_minutes=schedule_interval_minutes,
+            next_run_at=next_run_at,
             status=JobStatus.PENDING
         )
     
@@ -77,6 +98,85 @@ class JobRepository:
             WHERE id = ? AND tenant_id = ?
         """, (status.value, progress, error_message, job_id, tenant_id))
         
+        conn.commit()
+        success = cursor.rowcount > 0
+        conn.close()
+        return success
+
+    @staticmethod
+    def record_run_start(job_id: int, tenant_id: int) -> bool:
+        """Record that a run started: bump run_count and set last_run_at."""
+        conn = get_db()
+        cursor = conn.cursor()
+        cursor.execute("""
+            UPDATE jobs
+            SET run_count = COALESCE(run_count, 0) + 1,
+                last_run_at = ?,
+                last_run_status = 'running'
+            WHERE id = ? AND tenant_id = ?
+        """, (datetime.now(), job_id, tenant_id))
+        conn.commit()
+        success = cursor.rowcount > 0
+        conn.close()
+        return success
+
+    @staticmethod
+    def record_run_end(job_id: int, tenant_id: int, status: str) -> bool:
+        """Record the terminal status of the most recent run."""
+        conn = get_db()
+        cursor = conn.cursor()
+        cursor.execute("""
+            UPDATE jobs SET last_run_status = ? WHERE id = ? AND tenant_id = ?
+        """, (status, job_id, tenant_id))
+        conn.commit()
+        success = cursor.rowcount > 0
+        conn.close()
+        return success
+
+    @staticmethod
+    def get_due_jobs(limit: int = 100) -> List[Job]:
+        """Return enabled jobs whose next scheduled run is due (or unset)."""
+        from datetime import datetime
+        now = datetime.now()
+        conn = get_db()
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT * FROM jobs
+            WHERE enabled = 1
+              AND schedule_interval_minutes IS NOT NULL
+              AND (next_run_at IS NULL OR next_run_at <= ?)
+              AND status NOT IN ('running')
+            ORDER BY next_run_at IS NULL DESC, next_run_at ASC
+            LIMIT ?
+        """, (now, limit))
+        rows = cursor.fetchall()
+        conn.close()
+
+        jobs = []
+        for row in rows:
+            row_dict = dict_from_row(row)
+            row_dict["source_ssl"] = bool(row_dict.get("source_ssl"))
+            row_dict["target_ssl"] = bool(row_dict.get("target_ssl"))
+            row_dict["dry_run"] = bool(row_dict.get("dry_run"))
+            row_dict["sync_calendar"] = bool(row_dict.get("sync_calendar"))
+            row_dict["sync_contacts"] = bool(row_dict.get("sync_contacts"))
+            row_dict["sync_tasks"] = bool(row_dict.get("sync_tasks"))
+            row_dict["enabled"] = bool(row_dict.get("enabled"))
+            row_dict["source_password"] = JobRepository._secrets.decrypt(row_dict.get("source_password") or "")
+            row_dict["target_password"] = JobRepository._secrets.decrypt(row_dict.get("target_password") or "")
+            row_dict["mailcow_api_key"] = JobRepository._secrets.decrypt(row_dict.get("mailcow_api_key") or "")
+            jobs.append(Job(**row_dict))
+        return jobs
+
+    @staticmethod
+    def schedule_next_run(job_id: int, tenant_id: int, interval_minutes: int) -> bool:
+        """Set next_run_at to now + interval_minutes."""
+        from datetime import timedelta
+        conn = get_db()
+        cursor = conn.cursor()
+        cursor.execute("""
+            UPDATE jobs SET next_run_at = ? WHERE id = ? AND tenant_id = ?
+        """, (datetime.now() + timedelta(minutes=interval_minutes), job_id, tenant_id))
         conn.commit()
         success = cursor.rowcount > 0
         conn.close()
@@ -102,6 +202,10 @@ class JobRepository:
             row_dict["dry_run"] = bool(row_dict.get("dry_run"))
             row_dict["sync_calendar"] = bool(row_dict.get("sync_calendar"))
             row_dict["sync_contacts"] = bool(row_dict.get("sync_contacts"))
+            row_dict["sync_tasks"] = bool(row_dict.get("sync_tasks"))
+            row_dict["source_password"] = JobRepository._secrets.decrypt(row_dict.get("source_password") or "")
+            row_dict["target_password"] = JobRepository._secrets.decrypt(row_dict.get("target_password") or "")
+            row_dict["mailcow_api_key"] = JobRepository._secrets.decrypt(row_dict.get("mailcow_api_key") or "")
             return Job(**row_dict)
         return None
     
@@ -138,6 +242,10 @@ class JobRepository:
             row_dict["dry_run"] = bool(row_dict.get("dry_run"))
             row_dict["sync_calendar"] = bool(row_dict.get("sync_calendar"))
             row_dict["sync_contacts"] = bool(row_dict.get("sync_contacts"))
+            row_dict["sync_tasks"] = bool(row_dict.get("sync_tasks"))
+            row_dict["source_password"] = JobRepository._secrets.decrypt(row_dict.get("source_password") or "")
+            row_dict["target_password"] = JobRepository._secrets.decrypt(row_dict.get("target_password") or "")
+            row_dict["mailcow_api_key"] = JobRepository._secrets.decrypt(row_dict.get("mailcow_api_key") or "")
             jobs.append(Job(**row_dict))
         return jobs
     

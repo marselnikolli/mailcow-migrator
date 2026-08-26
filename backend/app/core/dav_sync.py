@@ -91,11 +91,17 @@ class DavSyncer:
         self.source_contacts = urljoin(
             f"{src_scheme}://{source_host}{source_base}{user}/", "Contacts/"
         )
+        self.source_tasks = urljoin(
+            f"{src_scheme}://{source_host}{source_base}{user}/", "Tasks/"
+        )
         self.target_calendar = urljoin(
             f"{tgt_scheme}://{target_host}{target_base}{tuser}/", "Calendar/"
         )
         self.target_contacts = urljoin(
             f"{tgt_scheme}://{target_host}{target_base}{tuser}/", "Contacts/"
+        )
+        self.target_tasks = urljoin(
+            f"{tgt_scheme}://{target_host}{target_base}{tuser}/", "Tasks/"
         )
 
         self.source_auth = (source_email, source_password)
@@ -287,6 +293,39 @@ class DavSyncer:
             self._log(f"Uploaded {uploaded} calendar items to {target}")
         return {"total": len(items), "uploaded": uploaded}
 
+    def sync_tasks(self) -> dict:
+        """Migrate the VTODO (tasks) collection if the source exposes one.
+
+        Some servers (e.g. SOGo) expose tasks under a separate collection;
+        Zimbra typically folds VTODOs into the calendar. Probes the source and
+        gracefully no-ops when there is no tasks collection."""
+        self._log(f"CalDAV tasks source: {self.source_tasks}")
+        try:
+            target = self._resolve_target(self.target_tasks, self.target_auth, "calendar", "personal")
+        except DavSyncError:
+            self._log("No writable tasks collection on target - skipping tasks sync")
+            return {"total": 0, "uploaded": 0}
+
+        try:
+            items = self._report_items(self.source_tasks, self.source_auth,
+                                       self._calendar_query_body())
+        except DavSyncError:
+            self._log("No tasks collection on source - skipping tasks sync")
+            return {"total": 0, "uploaded": 0}
+
+        self._log(f"Found {len(items)} task items on source")
+        uploaded = 0
+        for item in items:
+            uid = _extract_uid(item["data"], "calendar")
+            self._put_item(
+                target, self.target_auth, f"{uid}.ics",
+                item["data"], "text/calendar; charset=utf-8",
+            )
+            uploaded += 1
+        if uploaded:
+            self._log(f"Uploaded {uploaded} task items to {target}")
+        return {"total": len(items), "uploaded": uploaded}
+
     def sync_contacts(self) -> dict:
         """Migrate the address book collection. Returns {total, uploaded}."""
         self._log(f"CardDAV source: {self.source_contacts}")
@@ -308,7 +347,8 @@ class DavSyncer:
             self._log(f"Uploaded {uploaded} contacts to {target}")
         return {"total": len(items), "uploaded": uploaded}
 
-    def run(self, sync_calendar: bool, sync_contacts: bool, dry_run: bool = False) -> dict:
+    def run(self, sync_calendar: bool, sync_contacts: bool, sync_tasks: bool = False,
+            dry_run: bool = False) -> dict:
         """Run the requested DAV syncs. In dry-run mode nothing is written to
         the destination, but sources are still probed and item counts logged."""
         results = {}
@@ -319,6 +359,16 @@ class DavSyncer:
                                            self._calendar_query_body())
                 self._log(f"[DRY RUN] Would upload {len(items)} calendar items")
                 results["calendar"] = {"total": len(items), "uploaded": 0}
+            if sync_tasks:
+                self._log(f"[DRY RUN] CalDAV tasks source: {self.source_tasks}")
+                try:
+                    items = self._report_items(self.source_tasks, self.source_auth,
+                                               self._calendar_query_body())
+                    self._log(f"[DRY RUN] Would upload {len(items)} task items")
+                except DavSyncError:
+                    items = []
+                    self._log("[DRY RUN] No tasks collection on source")
+                results["tasks"] = {"total": len(items), "uploaded": 0}
             if sync_contacts:
                 self._log(f"[DRY RUN] CardDAV source: {self.source_contacts}")
                 items = self._report_items(self.source_contacts, self.source_auth,
@@ -329,6 +379,8 @@ class DavSyncer:
 
         if sync_calendar:
             results["calendar"] = self.sync_calendar()
+        if sync_tasks:
+            results["tasks"] = self.sync_tasks()
         if sync_contacts:
             results["contacts"] = self.sync_contacts()
         return results
