@@ -145,7 +145,7 @@ class JobRepository:
             WHERE enabled = 1
               AND schedule_interval_minutes IS NOT NULL
               AND (next_run_at IS NULL OR next_run_at <= ?)
-              AND status NOT IN ('running')
+              AND status NOT IN ('running', 'paused')
             ORDER BY next_run_at IS NULL DESC, next_run_at ASC
             LIMIT ?
         """, (now, limit))
@@ -258,6 +258,31 @@ class JobRepository:
 
         set_clause = ", ".join(f"{column} = ?" for column in fields)
         values = list(fields.values()) + [job_id, tenant_id]
+
+        conn = get_db()
+        cursor = conn.cursor()
+        cursor.execute(
+            f"UPDATE jobs SET {set_clause} WHERE id = ? AND tenant_id = ?",
+            values,
+        )
+        conn.commit()
+        success = cursor.rowcount > 0
+        conn.close()
+        return success
+
+    @staticmethod
+    def update_job_counts(job_id: int, tenant_id: int, **counts) -> bool:
+        """Update itemized count/ETA columns on a job.
+
+        Intended for live progress bookkeeping (copied_messages,
+        calendar_copied, eta_seconds, ...). Callers are expected to throttle
+        writes (e.g. only on progress change / every few seconds) so the DB
+        isn't hammered per imapsync log line."""
+        if not counts:
+            return False
+
+        set_clause = ", ".join(f"{column} = ?" for column in counts)
+        values = list(counts.values()) + [job_id, tenant_id]
 
         conn = get_db()
         cursor = conn.cursor()

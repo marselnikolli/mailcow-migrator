@@ -4,8 +4,9 @@ from pydantic import BaseModel
 from typing import List
 from urllib.parse import urlparse
 from app.repositories.job_repo import JobRepository
-from app.models import JobStatus, JobCreate, JobResponse, BulkJobCreate, ImportedAccount, JobUpdate, Job
+from app.models import JobStatus, JobCreate, JobResponse, BulkJobCreate, BulkJobAction, ImportedAccount, JobUpdate, Job
 from app.core.queue import RedisQueue
+from app.core.payloads import build_queue_payload
 from app.core.report import build_report, report_to_csv
 from app.core.estimate import MailboxEstimator
 from app.core.autodiscover import discover_imap_host
@@ -78,65 +79,63 @@ def _apply_defaults(job: JobCreate) -> JobCreate:
 
 
 def _to_queue_job(job: JobCreate, tenant_id: int, db_job_id: int) -> dict:
-    return {
-        "id": db_job_id,
-        "tenant_id": tenant_id,
-        "source_email": job.source_email,
-        "source_password": _secrets.encrypt(job.source_password),
-        "target_email": job.target_email,
-        "target_password": _secrets.encrypt(job.target_password),
-        "source_host": job.source_server.host,
-        "source_port": job.source_server.port,
-        "source_ssl": job.source_server.ssl,
-        "target_type": job.target_type,
-        "target_host": job.target_server.host,
-        "target_port": job.target_server.port,
-        "target_ssl": job.target_server.ssl,
-        "mailcow_url": job.mailcow_url,
-        "mailcow_api_key": _secrets.encrypt(job.mailcow_api_key or ""),
-        "dry_run": job.dry_run,
-        "sync_calendar": job.sync_calendar,
-        "sync_contacts": job.sync_contacts,
-        "sync_tasks": job.sync_tasks,
-        "folders": job.folders,
-        "maxage_days": job.maxage_days,
-        "since_date": job.since_date,
-        "enabled": job.enabled,
-        "schedule_interval_minutes": job.schedule_interval_minutes,
-        "retry_count": 0
-    }
+    return build_queue_payload(
+        id=db_job_id,
+        tenant_id=tenant_id,
+        source_email=job.source_email,
+        source_password=_secrets.encrypt(job.source_password),
+        target_email=job.target_email,
+        target_password=_secrets.encrypt(job.target_password),
+        source_host=job.source_server.host,
+        source_port=job.source_server.port,
+        source_ssl=job.source_server.ssl,
+        target_type=job.target_type,
+        target_host=job.target_server.host,
+        target_port=job.target_server.port,
+        target_ssl=job.target_server.ssl,
+        mailcow_url=job.mailcow_url,
+        mailcow_api_key=_secrets.encrypt(job.mailcow_api_key or ""),
+        dry_run=job.dry_run,
+        sync_calendar=job.sync_calendar,
+        sync_contacts=job.sync_contacts,
+        sync_tasks=job.sync_tasks,
+        folders=job.folders,
+        maxage_days=job.maxage_days,
+        since_date=job.since_date,
+        enabled=job.enabled,
+        schedule_interval_minutes=job.schedule_interval_minutes,
+    )
 
 
 def _job_to_queue_dict(job: Job, tenant_id: int) -> dict:
     """Build a worker queue payload from a stored Job row (used by retry/edit,
     where we start from the DB record rather than a fresh JobCreate)."""
-    return {
-        "id": job.id,
-        "tenant_id": tenant_id,
-        "source_email": job.source_email,
-        "source_password": _secrets.encrypt(job.source_password or ""),
-        "target_email": job.target_email,
-        "target_password": _secrets.encrypt(job.target_password or ""),
-        "source_host": job.source_host,
-        "source_port": job.source_port,
-        "source_ssl": job.source_ssl,
-        "target_type": job.target_type,
-        "target_host": job.target_host,
-        "target_port": job.target_port,
-        "target_ssl": job.target_ssl,
-        "mailcow_url": job.mailcow_url,
-        "mailcow_api_key": _secrets.encrypt(job.mailcow_api_key or ""),
-        "dry_run": job.dry_run,
-        "sync_calendar": job.sync_calendar,
-        "sync_contacts": job.sync_contacts,
-        "sync_tasks": job.sync_tasks,
-        "folders": job.folders,
-        "maxage_days": job.maxage_days,
-        "since_date": job.since_date,
-        "enabled": job.enabled,
-        "schedule_interval_minutes": job.schedule_interval_minutes,
-        "retry_count": 0
-    }
+    return build_queue_payload(
+        id=job.id,
+        tenant_id=tenant_id,
+        source_email=job.source_email,
+        source_password=_secrets.encrypt(job.source_password or ""),
+        target_email=job.target_email,
+        target_password=_secrets.encrypt(job.target_password or ""),
+        source_host=job.source_host,
+        source_port=job.source_port,
+        source_ssl=job.source_ssl,
+        target_type=job.target_type,
+        target_host=job.target_host,
+        target_port=job.target_port,
+        target_ssl=job.target_ssl,
+        mailcow_url=job.mailcow_url,
+        mailcow_api_key=_secrets.encrypt(job.mailcow_api_key or ""),
+        dry_run=job.dry_run,
+        sync_calendar=job.sync_calendar,
+        sync_contacts=job.sync_contacts,
+        sync_tasks=job.sync_tasks,
+        folders=job.folders,
+        maxage_days=job.maxage_days,
+        since_date=job.since_date,
+        enabled=job.enabled,
+        schedule_interval_minutes=job.schedule_interval_minutes,
+    )
 
 
 @router.post("/create")
@@ -183,8 +182,10 @@ async def create_job(request: Request, job_data: JobCreate):
         schedule_interval_minutes=job_data.schedule_interval_minutes
     )
 
-    # Push to queue for processing
+    # Push to queue for processing + schedule the pre-migration scan (counts
+    # what will be migrated so the UI can show a real progress bar).
     queue.push_job(_to_queue_job(job_data, tenant_id, job.id))
+    queue.push_scan(_to_queue_job(job_data, tenant_id, job.id))
     
     return {
         "id": job.id,
@@ -256,6 +257,7 @@ async def bulk_create_jobs(request: Request, bulk_data: BulkJobCreate):
             schedule_interval_minutes=job_data.schedule_interval_minutes
         )
         queue.push_job(_to_queue_job(job_data, tenant_id, job.id))
+        queue.push_scan(_to_queue_job(job_data, tenant_id, job.id))
         created.append({
             "id": job.id,
             "status": JobStatus.PENDING.value,
@@ -311,13 +313,24 @@ async def list_jobs(request: Request, status: str = None, limit: int = 100, offs
             "schedule_interval_minutes": job.schedule_interval_minutes,
             "error_message": job.error_message,
             "created_at": job.created_at,
-            "completed_at": job.completed_at
+            "completed_at": job.completed_at,
+            "scan_status": job.scan_status,
+            "total_messages": job.total_messages,
+            "copied_messages": job.copied_messages,
+            "total_calendar": job.total_calendar,
+            "calendar_copied": job.calendar_copied,
+            "total_contacts": job.total_contacts,
+            "contacts_copied": job.contacts_copied,
+            "total_tasks": job.total_tasks,
+            "tasks_copied": job.tasks_copied,
+            "expected_total": job.expected_total,
+            "eta_seconds": job.eta_seconds,
         }
         for job in jobs
     ]
 
 
-@router.post("/retry/{job_id}")
+@router.post("/retry/{job_id:int}")
 async def retry_job(request: Request, job_id: int):
     """Retry a failed job."""
     tenant_id = request.state.tenant_id
@@ -329,13 +342,15 @@ async def retry_job(request: Request, job_id: int):
     # Reset job status
     JobRepository.update_job_status(job_id, tenant_id, JobStatus.PENDING, error_message=None)
 
-    # Re-queue job with full config
+    # Re-queue job with full config + refresh the pre-migration scan (its
+    # previous run may have failed, leaving expected_total stale).
     queue.push_job(_job_to_queue_dict(job, tenant_id))
+    queue.push_scan(_job_to_queue_dict(job, tenant_id))
 
     return {"status": "queued"}
 
 
-@router.put("/{job_id}")
+@router.put("/{job_id:int}")
 async def update_job(request: Request, job_id: int, update: JobUpdate):
     """Edit a job's destination configuration. Only allowed while the job is
     still pending (a worker hasn't picked it up yet)."""
@@ -419,11 +434,14 @@ async def update_job(request: Request, job_id: int, update: JobUpdate):
     if queue.remove_job(job_id):
         updated_job = JobRepository.get_job_by_id(job_id, tenant_id)
         queue.push_job(_job_to_queue_dict(updated_job, tenant_id))
+        # Refresh the pre-migration scan too: the edit may have changed
+        # folders/date filters, which changes what will be migrated.
+        queue.push_scan(_job_to_queue_dict(updated_job, tenant_id))
 
     return {"status": "updated", "id": job_id}
 
 
-@router.post("/{job_id}/cancel")
+@router.post("/{job_id:int}/cancel")
 async def cancel_job(request: Request, job_id: int):
     """Cancel a pending or running job."""
     tenant_id = request.state.tenant_id
@@ -439,11 +457,56 @@ async def cancel_job(request: Request, job_id: int):
         # Already picked up by a worker - ask it to stop between log lines.
         queue.request_cancel(job_id)
 
+    queue.clear_pause(job_id)
     JobRepository.update_job_status(job_id, tenant_id, JobStatus.CANCELLED, progress=job.progress)
     return {"status": "cancelled", "id": job_id}
 
 
-@router.delete("/{job_id}")
+@router.post("/{job_id:int}/pause")
+async def pause_job(request: Request, job_id: int):
+    """Soft-pause a pending or running job.
+
+    For a pending (still-queued) job this removes it from the queue and marks
+    it PAUSED immediately. For a running job it sets a Redis flag the worker
+    honors at safe boundaries (between IMAP folders, before/within the DAV
+    phase); the job moves to PAUSED when the worker observes it. Either way a
+    paused job can be resumed later."""
+    tenant_id = request.state.tenant_id
+
+    job = JobRepository.get_job_by_id(job_id, tenant_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    if job.status in (JobStatus.COMPLETED, JobStatus.FAILED, JobStatus.CANCELLED, JobStatus.PAUSED):
+        raise HTTPException(status_code=400, detail=f"Job is already {job.status.value}")
+
+    queue.request_pause(job_id)
+    if queue.remove_job(job_id):
+        # Still queued - nothing is running, so there's no worker to observe
+        # the flag; mark it paused directly.
+        queue.clear_pause(job_id)
+        JobRepository.update_job_status(job_id, tenant_id, JobStatus.PAUSED, progress=job.progress)
+    return {"status": "pausing", "id": job_id}
+
+
+@router.post("/{job_id:int}/resume")
+async def resume_job(request: Request, job_id: int):
+    """Resume a paused job. imapsync is idempotent, so re-queuing it picks up
+    where it left off."""
+    tenant_id = request.state.tenant_id
+
+    job = JobRepository.get_job_by_id(job_id, tenant_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    if job.status != JobStatus.PAUSED:
+        raise HTTPException(status_code=400, detail=f"Only paused jobs can be resumed (job is {job.status.value})")
+
+    queue.clear_pause(job_id)
+    JobRepository.update_job_status(job_id, tenant_id, JobStatus.PENDING, progress=job.progress, error_message=None)
+    queue.push_job(_job_to_queue_dict(job, tenant_id))
+    return {"status": "resumed", "id": job_id}
+
+
+@router.delete("/{job_id:int}")
 async def delete_job(request: Request, job_id: int):
     """Delete a job and its logs. Running jobs must be cancelled first."""
     tenant_id = request.state.tenant_id
@@ -457,12 +520,101 @@ async def delete_job(request: Request, job_id: int):
     queue.remove_job(job_id)
     queue.clear_job_log(job_id)
     queue.clear_cancel(job_id)
+    queue.clear_pause(job_id)
     JobRepository.delete_job(job_id, tenant_id)
 
     return {"status": "deleted", "id": job_id}
 
 
-@router.get("/{job_id}")
+def _bulk_jobs(request: Request, job_ids: List[int], eligible: set) -> tuple:
+    """Split a bulk action's ids into (eligible Jobs, skipped [{id, reason}]).
+
+    Per-job eligibility keeps a bulk action from failing entirely because a
+    single job is in the wrong state - each job is evaluated on its own."""
+    tenant_id = request.state.tenant_id
+    ok, skipped = [], []
+    for jid in job_ids:
+        job = JobRepository.get_job_by_id(jid, tenant_id)
+        if not job:
+            skipped.append({"id": jid, "reason": "not found"})
+        elif job.status not in eligible:
+            skipped.append({"id": jid, "reason": f"job is {job.status.value}"})
+        else:
+            ok.append(job)
+    return ok, skipped
+
+
+@router.post("/bulk/cancel")
+async def bulk_cancel_jobs(request: Request, body: BulkJobAction):
+    """Cancel multiple pending/running jobs at once."""
+    tenant_id = request.state.tenant_id
+    ok, skipped = _bulk_jobs(request, body.job_ids,
+                             {JobStatus.PENDING, JobStatus.RUNNING})
+    for job in ok:
+        if not queue.remove_job(job.id):
+            queue.request_cancel(job.id)
+        queue.clear_pause(job.id)
+        JobRepository.update_job_status(job.id, tenant_id, JobStatus.CANCELLED, progress=job.progress)
+    return {"ok": [j.id for j in ok], "skipped": skipped}
+
+
+@router.post("/bulk/pause")
+async def bulk_pause_jobs(request: Request, body: BulkJobAction):
+    """Soft-pause multiple pending/running jobs at once."""
+    tenant_id = request.state.tenant_id
+    ok, skipped = _bulk_jobs(request, body.job_ids,
+                             {JobStatus.PENDING, JobStatus.RUNNING})
+    for job in ok:
+        queue.request_pause(job.id)
+        if queue.remove_job(job.id):
+            # Still queued - mark paused directly; running jobs transition
+            # when the worker observes the flag.
+            queue.clear_pause(job.id)
+            JobRepository.update_job_status(job.id, tenant_id, JobStatus.PAUSED, progress=job.progress)
+    return {"ok": [j.id for j in ok], "skipped": skipped}
+
+
+@router.post("/bulk/resume")
+async def bulk_resume_jobs(request: Request, body: BulkJobAction):
+    """Resume multiple paused jobs at once."""
+    tenant_id = request.state.tenant_id
+    ok, skipped = _bulk_jobs(request, body.job_ids, {JobStatus.PAUSED})
+    for job in ok:
+        queue.clear_pause(job.id)
+        JobRepository.update_job_status(job.id, tenant_id, JobStatus.PENDING, progress=job.progress, error_message=None)
+        queue.push_job(_job_to_queue_dict(job, tenant_id))
+    return {"ok": [j.id for j in ok], "skipped": skipped}
+
+
+@router.post("/bulk/retry")
+async def bulk_retry_jobs(request: Request, body: BulkJobAction):
+    """Retry multiple failed jobs at once."""
+    tenant_id = request.state.tenant_id
+    ok, skipped = _bulk_jobs(request, body.job_ids, {JobStatus.FAILED})
+    for job in ok:
+        JobRepository.update_job_status(job.id, tenant_id, JobStatus.PENDING, error_message=None)
+        queue.push_job(_job_to_queue_dict(job, tenant_id))
+    return {"ok": [j.id for j in ok], "skipped": skipped}
+
+
+@router.post("/bulk/delete")
+async def bulk_delete_jobs(request: Request, body: BulkJobAction):
+    """Delete multiple non-running jobs (with their logs) at once."""
+    tenant_id = request.state.tenant_id
+    ok, skipped = _bulk_jobs(request, body.job_ids,
+                             {JobStatus.PENDING, JobStatus.FAILED,
+                              JobStatus.COMPLETED, JobStatus.CANCELLED,
+                              JobStatus.PAUSED})
+    for job in ok:
+        queue.remove_job(job.id)
+        queue.clear_job_log(job.id)
+        queue.clear_cancel(job.id)
+        queue.clear_pause(job.id)
+        JobRepository.delete_job(job.id, tenant_id)
+    return {"ok": [j.id for j in ok], "skipped": skipped}
+
+
+@router.get("/{job_id:int}")
 async def get_job(request: Request, job_id: int):
     """Get job details."""
     tenant_id = request.state.tenant_id
@@ -497,11 +649,22 @@ async def get_job(request: Request, job_id: int):
         "schedule_interval_minutes": job.schedule_interval_minutes,
         "error_message": job.error_message,
         "created_at": job.created_at,
-        "completed_at": job.completed_at
+        "completed_at": job.completed_at,
+        "scan_status": job.scan_status,
+        "total_messages": job.total_messages,
+        "copied_messages": job.copied_messages,
+        "total_calendar": job.total_calendar,
+        "calendar_copied": job.calendar_copied,
+        "total_contacts": job.total_contacts,
+        "contacts_copied": job.contacts_copied,
+        "total_tasks": job.total_tasks,
+        "tasks_copied": job.tasks_copied,
+        "expected_total": job.expected_total,
+        "eta_seconds": job.eta_seconds,
     }
 
 
-@router.get("/{job_id}/report")
+@router.get("/{job_id:int}/report")
 async def get_job_report(request: Request, job_id: int):
     """Get a structured migration report for a job, parsed from its log."""
     tenant_id = request.state.tenant_id
@@ -520,7 +683,7 @@ async def get_job_report(request: Request, job_id: int):
     return report
 
 
-@router.get("/{job_id}/report.csv")
+@router.get("/{job_id:int}/report.csv")
 async def get_job_report_csv(request: Request, job_id: int):
     """Export a job's migration report as CSV."""
     tenant_id = request.state.tenant_id
@@ -543,7 +706,7 @@ async def get_job_report_csv(request: Request, job_id: int):
     )
 
 
-@router.get("/{job_id}/estimate")
+@router.get("/{job_id:int}/estimate")
 async def get_job_estimate(request: Request, job_id: int):
     """Connect to the source and estimate mailbox size / folder counts without
     transferring anything. Useful before a real migration to size the target."""

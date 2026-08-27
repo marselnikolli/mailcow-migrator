@@ -302,6 +302,17 @@ def migrate_schema():
             "enabled": "INTEGER DEFAULT 0",
             "schedule_interval_minutes": "INTEGER",
             "next_run_at": "TIMESTAMP",
+            "scan_status": "TEXT DEFAULT 'queued'",
+            "total_messages": "INTEGER DEFAULT 0",
+            "copied_messages": "INTEGER DEFAULT 0",
+            "total_calendar": "INTEGER DEFAULT 0",
+            "calendar_copied": "INTEGER DEFAULT 0",
+            "total_contacts": "INTEGER DEFAULT 0",
+            "contacts_copied": "INTEGER DEFAULT 0",
+            "total_tasks": "INTEGER DEFAULT 0",
+            "tasks_copied": "INTEGER DEFAULT 0",
+            "expected_total": "INTEGER DEFAULT 0",
+            "eta_seconds": "INTEGER",
         }
         for column, definition in migrations.items():
             if column not in existing:
@@ -337,6 +348,17 @@ def migrate_schema():
         "enabled": "INTEGER DEFAULT 0",
         "schedule_interval_minutes": "INTEGER",
         "next_run_at": "TIMESTAMP",
+        "scan_status": "TEXT DEFAULT 'queued'",
+        "total_messages": "INTEGER DEFAULT 0",
+        "copied_messages": "INTEGER DEFAULT 0",
+        "total_calendar": "INTEGER DEFAULT 0",
+        "calendar_copied": "INTEGER DEFAULT 0",
+        "total_contacts": "INTEGER DEFAULT 0",
+        "contacts_copied": "INTEGER DEFAULT 0",
+        "total_tasks": "INTEGER DEFAULT 0",
+        "tasks_copied": "INTEGER DEFAULT 0",
+        "expected_total": "INTEGER DEFAULT 0",
+        "eta_seconds": "INTEGER",
     }
 
     for column, definition in migrations.items():

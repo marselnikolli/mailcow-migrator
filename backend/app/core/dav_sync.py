@@ -33,6 +33,13 @@ class DavSyncError(Exception):
     """Raised when calendar/address book sync cannot proceed."""
 
 
+class PauseRequested(DavSyncError):
+    """Raised internally when a cooperative pause is requested mid-sync.
+
+    Distinct from a hard failure: the worker catches this and marks the job
+    PAUSED (resumable) instead of FAILED."""
+
+
 def _tag(ns: str, name: str) -> str:
     return f"{{{ns}}}{name}"
 
@@ -75,6 +82,7 @@ class DavSyncer:
         target_base: str = "/SOGo/dav/",
         timeout: int = 120,
         on_log: Optional[Callable[[str], None]] = None,
+        should_pause: Optional[Callable[[], bool]] = None,
     ):
         self.session = requests.Session()
         self.session.verify = False  # matches imapsync's default SSL_VERIFY_NONE
@@ -108,11 +116,18 @@ class DavSyncer:
         self.target_auth = (target_email, target_password)
         self.timeout = timeout
         self.on_log = on_log
+        self.should_pause = should_pause
 
     def _log(self, message: str) -> None:
         if self.on_log:
             self.on_log(message)
         logger.info(message)
+
+    def _check_pause(self) -> None:
+        """Honor a cooperative pause between items. Each PUT is atomic and
+        idempotent (keyed by UID), so stopping here is always safe."""
+        if self.should_pause and self.should_pause():
+            raise PauseRequested()
 
     # ---------------------------------------------------------------- helpers
 
@@ -283,6 +298,7 @@ class DavSyncer:
 
         uploaded = 0
         for item in items:
+            self._check_pause()
             uid = _extract_uid(item["data"], "calendar")
             self._put_item(
                 target, self.target_auth, f"{uid}.ics",
@@ -316,6 +332,7 @@ class DavSyncer:
         self._log(f"Found {len(items)} task items on source")
         uploaded = 0
         for item in items:
+            self._check_pause()
             uid = _extract_uid(item["data"], "calendar")
             self._put_item(
                 target, self.target_auth, f"{uid}.ics",
@@ -337,6 +354,7 @@ class DavSyncer:
 
         uploaded = 0
         for item in items:
+            self._check_pause()
             uid = _extract_uid(item["data"], "vcard")
             self._put_item(
                 target, self.target_auth, f"{uid}.vcf",
@@ -346,6 +364,46 @@ class DavSyncer:
         if uploaded:
             self._log(f"Uploaded {uploaded} contacts to {target}")
         return {"total": len(items), "uploaded": uploaded}
+
+    def estimate(self, sync_calendar: bool = False, sync_contacts: bool = False,
+                 sync_tasks: bool = False) -> dict:
+        """Count items on the source collections without writing anything.
+
+        The same REPORT probes dry-run uses, minus any transfer. Missing
+        collections are counted as 0 rather than raised, so a scan can't fail
+        the whole job just because a server doesn't expose a tasks collection.
+        Returns {"calendar": int, "contacts": int, "tasks": int}."""
+        results = {}
+        if sync_calendar:
+            try:
+                items = self._report_items(self.source_calendar, self.source_auth,
+                                           self._calendar_query_body())
+            except DavSyncError as e:
+                self._log(f"Calendar estimate failed: {e}")
+                items = []
+            results["calendar"] = len(items)
+        else:
+            results["calendar"] = 0
+        if sync_tasks:
+            try:
+                items = self._report_items(self.source_tasks, self.source_auth,
+                                           self._calendar_query_body())
+            except DavSyncError:
+                items = []
+            results["tasks"] = len(items)
+        else:
+            results["tasks"] = 0
+        if sync_contacts:
+            try:
+                items = self._report_items(self.source_contacts, self.source_auth,
+                                           self._addressbook_query_body())
+            except DavSyncError as e:
+                self._log(f"Contacts estimate failed: {e}")
+                items = []
+            results["contacts"] = len(items)
+        else:
+            results["contacts"] = 0
+        return results
 
     def run(self, sync_calendar: bool, sync_contacts: bool, sync_tasks: bool = False,
             dry_run: bool = False) -> dict:

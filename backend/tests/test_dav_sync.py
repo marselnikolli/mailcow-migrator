@@ -129,3 +129,31 @@ def test_find_writable_collections_filters_gal(monkeypatch):
     )
     # GAL directory excluded; personal not present in fixture, so empty.
     assert addressbooks == []
+
+
+def test_estimate_counts_without_writing(monkeypatch):
+    syncer = make_syncer()
+
+    class FakeResp:
+        status_code = 207
+        content = CAL_QUERY_RESPONSE.encode()
+
+    # Calendar query returns 1 item; contacts/tasks collections raise.
+    def fake_request(method, url, **kwargs):
+        if method == "REPORT" and "Calendar" in url:
+            return FakeResp()
+        raise DavSyncError("no collection")
+
+    monkeypatch.setattr(syncer.session, "request", fake_request)
+    result = syncer.estimate(sync_calendar=True, sync_contacts=True, sync_tasks=True)
+    assert result == {"calendar": 1, "contacts": 0, "tasks": 0}
+
+
+def test_estimate_does_not_network_when_not_requested(monkeypatch):
+    syncer = make_syncer()
+
+    def never(*a, **k):
+        raise AssertionError("estimate() must not touch the network when no sync flags are set")
+
+    monkeypatch.setattr(syncer.session, "request", never)
+    assert syncer.estimate() == {"calendar": 0, "contacts": 0, "tasks": 0}

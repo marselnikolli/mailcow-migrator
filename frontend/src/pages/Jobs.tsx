@@ -33,11 +33,12 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog'
-import { Upload, Plus, Trash2, RefreshCw, Play, MoreHorizontal, Pencil, Ban, Download, Gauge } from 'lucide-react'
+import { Upload, Plus, Trash2, RefreshCw, Play, MoreHorizontal, Pencil, Ban, Download, Gauge, Pause } from 'lucide-react'
 import LiveLogs from '../components/LiveLogs'
 import ImportModal from '../components/ImportModal'
 import EditJobDialog from '../components/EditJobDialog'
 import { JobStatusBadge } from '@/lib/job-status'
+import { Progress } from '@/components/ui/progress'
 
 interface Job {
   id: number
@@ -59,9 +60,38 @@ interface Job {
   run_count?: number
   enabled?: boolean
   schedule_interval_minutes?: number | null
+  scan_status?: string
+  total_messages?: number
+  copied_messages?: number
+  total_calendar?: number
+  calendar_copied?: number
+  total_contacts?: number
+  contacts_copied?: number
+  total_tasks?: number
+  tasks_copied?: number
+  expected_total?: number
+  eta_seconds?: number | null
 }
 
-type ConfirmKind = 'cancel' | 'delete'
+type ConfirmKind =
+  | 'cancel'
+  | 'delete'
+  | 'bulkCancel'
+  | 'bulkPause'
+  | 'bulkResume'
+  | 'bulkRetry'
+  | 'bulkDelete'
+
+function formatEta(seconds?: number | null): string {
+  if (seconds == null || !isFinite(seconds) || seconds < 0) return ''
+  const s = Math.round(seconds)
+  const h = Math.floor(s / 3600)
+  const m = Math.floor((s % 3600) / 60)
+  const sec = s % 60
+  if (h > 0) return `${h}h ${m}m left`
+  if (m > 0) return `${m}m ${sec}s left`
+  return `${sec}s left`
+}
 
 interface AccountRow {
   key: number
@@ -86,9 +116,10 @@ const Jobs: React.FC = () => {
   const [createSuccess, setCreateSuccess] = useState('')
   const [creating, setCreating] = useState(false)
   const [editingJobId, setEditingJobId] = useState<number | null>(null)
-  const [confirmJob, setConfirmJob] = useState<{ job: Job; kind: ConfirmKind } | null>(null)
+  const [confirmJob, setConfirmJob] = useState<{ job: Job | null; kind: ConfirmKind; ids?: number[] } | null>(null)
   const [actionError, setActionError] = useState('')
   const [actionPending, setActionPending] = useState(false)
+  const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set())
 
   // Source server config
   const [sourceHost, setSourceHost] = useState('imap.gmail.com')
@@ -136,11 +167,47 @@ const Jobs: React.FC = () => {
     }
   }
 
+  // Poll faster while anything is active so the progress bars feel live,
+  // then back off to a slower idle cadence.
+  const hasActiveJobs = jobs.some(
+    (j) =>
+      j.status === 'running' ||
+      j.status === 'pending' ||
+      j.scan_status === 'queued' ||
+      j.scan_status === 'scanning',
+  )
+
   useEffect(() => {
     fetchJobs()
-    const interval = setInterval(fetchJobs, 5000)
+    const interval = setInterval(fetchJobs, hasActiveJobs ? 2000 : 5000)
     return () => clearInterval(interval)
-  }, [filterStatus])
+  }, [filterStatus, hasActiveJobs])
+
+  const toggleAll = () => {
+    if (selectedIds.size === jobs.length) {
+      setSelectedIds(new Set())
+    } else {
+      setSelectedIds(new Set(jobs.map((j) => j.id)))
+    }
+  }
+
+  const toggleOne = (id: number) => {
+    const next = new Set(selectedIds)
+    if (next.has(id)) {
+      next.delete(id)
+    } else {
+      next.add(id)
+    }
+    setSelectedIds(next)
+  }
+
+  const selectedIdsArr = Array.from(selectedIds)
+  const selectedJobs = jobs.filter((j) => selectedIds.has(j.id))
+  const canBulkCancel = selectedJobs.some((j) => j.status === 'pending' || j.status === 'running')
+  const canBulkPause = selectedJobs.some((j) => j.status === 'pending' || j.status === 'running')
+  const canBulkResume = selectedJobs.some((j) => j.status === 'paused')
+  const canBulkRetry = selectedJobs.some((j) => j.status === 'failed')
+  const canBulkDelete = selectedJobs.some((j) => j.status !== 'running')
 
   const handleAddAccount = () => {
     setAccounts((prev) => [...prev, newEmptyAccount()])
@@ -311,20 +378,110 @@ const Jobs: React.FC = () => {
     }
   }
 
+  const handlePauseJob = async (jobId: number) => {
+    try {
+      await jobsApi.pauseJob(jobId)
+      setCreateSuccess('Pause requested - the job will stop at the next safe boundary')
+      setTimeout(fetchJobs, 1000)
+    } catch (error: any) {
+      setActionError(error.response?.data?.detail || 'Failed to pause job')
+    }
+  }
+
+  const handleResumeJob = async (jobId: number) => {
+    try {
+      await jobsApi.resumeJob(jobId)
+      setCreateSuccess('Job resumed - it will continue where it left off')
+      setTimeout(fetchJobs, 1000)
+    } catch (error: any) {
+      setActionError(error.response?.data?.detail || 'Failed to resume job')
+    }
+  }
+
+  const renderProgress = (job: Job) => {
+    const scanning = job.scan_status === 'queued' || job.scan_status === 'scanning'
+    const expected = job.expected_total || 0
+    const done =
+      (job.copied_messages || 0) +
+      (job.calendar_copied || 0) +
+      (job.contacts_copied || 0) +
+      (job.tasks_copied || 0)
+
+    if (job.status === 'completed') {
+      return <Progress value={100} />
+    }
+    if (job.status === 'running' && expected > 0) {
+      const pct = Math.min(100, Math.round((done / expected) * 100))
+      return (
+        <div className="space-y-1">
+          <Progress value={pct} />
+          <div className="flex items-center justify-between gap-2 text-xs text-muted-foreground">
+            <span>
+              {done.toLocaleString()} / {expected.toLocaleString()}
+            </span>
+            {job.eta_seconds != null && <span>{formatEta(job.eta_seconds)}</span>}
+          </div>
+        </div>
+      )
+    }
+    if (job.status === 'running') {
+      return (
+        <div className="space-y-1">
+          <Progress value={job.progress} />
+          <div className="text-xs text-muted-foreground">
+            {scanning ? 'Estimating mailbox size…' : `${job.progress}%`}
+          </div>
+        </div>
+      )
+    }
+    if (job.status === 'paused') {
+      return (
+        <div className="text-xs text-muted-foreground">
+          {done.toLocaleString()} / {expected.toLocaleString()}
+        </div>
+      )
+    }
+    return <span className="text-xs text-muted-foreground">—</span>
+  }
+
   const handleConfirmAction = async () => {
     if (!confirmJob) return
     setActionPending(true)
     setActionError('')
+    const { kind, ids } = confirmJob
     try {
-      if (confirmJob.kind === 'cancel') {
-        await jobsApi.cancelJob(confirmJob.job.id)
-      } else {
-        await jobsApi.deleteJob(confirmJob.job.id)
+      if (kind === 'bulkCancel') {
+        const res = await jobsApi.bulkCancelJobs(ids!)
+        const skipped = res.data.skipped || []
+        setCreateSuccess(`Cancelled ${res.data.ok?.length ?? 0} job(s)${skipped.length ? `, ${skipped.length} skipped` : ''}`)
+      } else if (kind === 'bulkPause') {
+        const res = await jobsApi.bulkPauseJobs(ids!)
+        const skipped = res.data.skipped || []
+        setCreateSuccess(`Paused ${res.data.ok?.length ?? 0} job(s)${skipped.length ? `, ${skipped.length} skipped` : ''}`)
+      } else if (kind === 'bulkResume') {
+        const res = await jobsApi.bulkResumeJobs(ids!)
+        const skipped = res.data.skipped || []
+        setCreateSuccess(`Resumed ${res.data.ok?.length ?? 0} job(s)${skipped.length ? `, ${skipped.length} skipped` : ''}`)
+      } else if (kind === 'bulkRetry') {
+        const res = await jobsApi.bulkRetryJobs(ids!)
+        const skipped = res.data.skipped || []
+        setCreateSuccess(`Retried ${res.data.ok?.length ?? 0} job(s)${skipped.length ? `, ${skipped.length} skipped` : ''}`)
+      } else if (kind === 'bulkDelete') {
+        const res = await jobsApi.bulkDeleteJobs(ids!)
+        const skipped = res.data.skipped || []
+        setCreateSuccess(`Deleted ${res.data.ok?.length ?? 0} job(s)${skipped.length ? `, ${skipped.length} skipped` : ''}`)
+      } else if (confirmJob.job) {
+        if (kind === 'cancel') {
+          await jobsApi.cancelJob(confirmJob.job.id)
+        } else {
+          await jobsApi.deleteJob(confirmJob.job.id)
+        }
       }
       setConfirmJob(null)
+      setSelectedIds(new Set())
       fetchJobs()
     } catch (error: any) {
-      setActionError(error.response?.data?.detail || `Failed to ${confirmJob.kind} job`)
+      setActionError(error.response?.data?.detail || `Failed to ${kind} job`)
     } finally {
       setActionPending(false)
     }
@@ -336,6 +493,57 @@ const Jobs: React.FC = () => {
   if (loading) {
     return <div className="flex items-center justify-center py-24 text-muted-foreground">Loading...</div>
   }
+
+  const confirmKind = confirmJob?.kind
+  const isDelete = confirmKind === 'delete' || confirmKind === 'bulkDelete'
+  const confirmTitle = (() => {
+    switch (confirmKind) {
+      case 'delete': return 'Delete this job?'
+      case 'cancel': return 'Cancel this job?'
+      case 'bulkCancel': return `Cancel ${confirmJob?.ids?.length ?? 0} selected jobs?`
+      case 'bulkPause': return `Pause ${confirmJob?.ids?.length ?? 0} selected jobs?`
+      case 'bulkResume': return `Resume ${confirmJob?.ids?.length ?? 0} selected jobs?`
+      case 'bulkRetry': return `Retry ${confirmJob?.ids?.length ?? 0} selected jobs?`
+      case 'bulkDelete': return `Delete ${confirmJob?.ids?.length ?? 0} selected jobs?`
+      default: return ''
+    }
+  })()
+  const confirmDesc = (() => {
+    if (confirmKind === 'delete') {
+      return <>This permanently removes the job for <strong>{confirmJob?.job?.source_email}</strong> and its logs. This can't be undone.</>
+    }
+    if (confirmKind === 'cancel') {
+      return <>This stops the migration for <strong>{confirmJob?.job?.source_email}</strong> as soon as possible. Already-transferred mail is not rolled back.</>
+    }
+    if (confirmKind === 'bulkDelete') {
+      return <>This permanently removes {confirmJob?.ids?.length ?? 0} selected jobs and their logs. This can't be undone.</>
+    }
+    if (confirmKind === 'bulkCancel') {
+      return <>This stops {confirmJob?.ids?.length ?? 0} selected migrations as soon as possible. Already-transferred mail is not rolled back.</>
+    }
+    if (confirmKind === 'bulkPause') {
+      return <>The selected jobs will pause at the next safe boundary (between folders, before the calendar/contacts/tasks phase). You can resume them later.</>
+    }
+    if (confirmKind === 'bulkResume') {
+      return <>The selected jobs will resume where they left off — imapsync skips already-copied messages.</>
+    }
+    if (confirmKind === 'bulkRetry') {
+      return <>The selected jobs will be re-queued and run again.</>
+    }
+    return ''
+  })()
+  const confirmLabel = (() => {
+    switch (confirmKind) {
+      case 'delete': return 'Delete'
+      case 'cancel': return 'Cancel job'
+      case 'bulkDelete': return `Delete ${confirmJob?.ids?.length ?? 0}`
+      case 'bulkCancel': return `Cancel ${confirmJob?.ids?.length ?? 0}`
+      case 'bulkPause': return `Pause ${confirmJob?.ids?.length ?? 0}`
+      case 'bulkResume': return `Resume ${confirmJob?.ids?.length ?? 0}`
+      case 'bulkRetry': return `Retry ${confirmJob?.ids?.length ?? 0}`
+      default: return ''
+    }
+  })()
 
   return (
     <div className="space-y-6">
@@ -710,13 +918,45 @@ const Jobs: React.FC = () => {
       {/* Filter */}
       <Tabs value={filterStatus} onValueChange={setFilterStatus}>
         <TabsList>
-          {['all', 'pending', 'running', 'completed', 'failed', 'cancelled'].map((status) => (
+          {['all', 'pending', 'running', 'paused', 'completed', 'failed', 'cancelled'].map((status) => (
             <TabsTrigger key={status} value={status}>
               {status.charAt(0).toUpperCase() + status.slice(1)}
             </TabsTrigger>
           ))}
         </TabsList>
       </Tabs>
+
+      {/* Bulk action toolbar */}
+      {selectedIds.size > 0 && (
+        <div className="flex flex-wrap items-center gap-2 rounded-lg border bg-muted/40 px-4 py-3">
+          <span className="text-sm font-medium">{selectedIds.size} selected</span>
+          <div className="ml-auto flex flex-wrap items-center gap-2">
+            <Button size="sm" variant="outline" disabled={!canBulkCancel} onClick={() => setConfirmJob({ job: null, kind: 'bulkCancel', ids: selectedIdsArr })}>
+              <Ban className="mr-1 h-4 w-4" />
+              Cancel
+            </Button>
+            <Button size="sm" variant="outline" disabled={!canBulkPause} onClick={() => setConfirmJob({ job: null, kind: 'bulkPause', ids: selectedIdsArr })}>
+              <Pause className="mr-1 h-4 w-4" />
+              Pause
+            </Button>
+            <Button size="sm" variant="outline" disabled={!canBulkResume} onClick={() => setConfirmJob({ job: null, kind: 'bulkResume', ids: selectedIdsArr })}>
+              <Play className="mr-1 h-4 w-4" />
+              Resume
+            </Button>
+            <Button size="sm" variant="outline" disabled={!canBulkRetry} onClick={() => setConfirmJob({ job: null, kind: 'bulkRetry', ids: selectedIdsArr })}>
+              <RefreshCw className="mr-1 h-4 w-4" />
+              Retry
+            </Button>
+            <Button size="sm" variant="destructive" disabled={!canBulkDelete} onClick={() => setConfirmJob({ job: null, kind: 'bulkDelete', ids: selectedIdsArr })}>
+              <Trash2 className="mr-1 h-4 w-4" />
+              Delete
+            </Button>
+            <Button size="sm" variant="ghost" onClick={() => setSelectedIds(new Set())}>
+              Clear
+            </Button>
+          </div>
+        </div>
+      )}
 
       {/* Jobs List */}
       <Card>
@@ -732,9 +972,17 @@ const Jobs: React.FC = () => {
             <Table>
               <TableHeader>
                 <TableRow>
+                  <TableHead className="w-10">
+                    <Checkbox
+                      aria-label="Select all jobs"
+                      checked={jobs.length > 0 && selectedIds.size === jobs.length}
+                      onCheckedChange={toggleAll}
+                    />
+                  </TableHead>
                   <TableHead>Source</TableHead>
                   <TableHead>Target</TableHead>
                   <TableHead>Server</TableHead>
+                  <TableHead>Progress</TableHead>
                   <TableHead>Status</TableHead>
                   <TableHead>Created</TableHead>
                   <TableHead>Actions</TableHead>
@@ -745,8 +993,16 @@ const Jobs: React.FC = () => {
                   <React.Fragment key={job.id}>
                     <TableRow
                       className="cursor-pointer"
+                      data-state={selectedIds.has(job.id) ? 'selected' : undefined}
                       onClick={() => setSelectedJobId(selectedJobId === job.id ? null : job.id)}
                     >
+                      <TableCell onClick={(e) => e.stopPropagation()}>
+                        <Checkbox
+                          aria-label={`Select job ${job.id}`}
+                          checked={selectedIds.has(job.id)}
+                          onCheckedChange={() => toggleOne(job.id)}
+                        />
+                      </TableCell>
                       <TableCell className="text-sm">{job.source_email}</TableCell>
                       <TableCell className="text-sm">{job.target_email}</TableCell>
                       <TableCell className="text-sm text-muted-foreground">
@@ -758,6 +1014,7 @@ const Jobs: React.FC = () => {
                         {!!job.run_count && <Badge variant="outline" className="ml-2">Run {job.run_count}</Badge>}
                         {job.enabled && <Badge variant="outline" className="ml-2">Every {job.schedule_interval_minutes}m</Badge>}
                       </TableCell>
+                      <TableCell className="min-w-[160px]">{renderProgress(job)}</TableCell>
                       <TableCell><JobStatusBadge status={job.status} /></TableCell>
                       <TableCell className="text-sm text-muted-foreground">
                         {new Date(job.created_at).toLocaleString()}
@@ -781,6 +1038,18 @@ const Jobs: React.FC = () => {
                               <DropdownMenuItem onClick={() => handleRetryJob(job.id)}>
                                 <RefreshCw className="mr-2 h-4 w-4" />
                                 Retry
+                              </DropdownMenuItem>
+                            )}
+                            {(job.status === 'pending' || job.status === 'running') && (
+                              <DropdownMenuItem onClick={() => handlePauseJob(job.id)}>
+                                <Pause className="mr-2 h-4 w-4" />
+                                Pause
+                              </DropdownMenuItem>
+                            )}
+                            {job.status === 'paused' && (
+                              <DropdownMenuItem onClick={() => handleResumeJob(job.id)}>
+                                <Play className="mr-2 h-4 w-4" />
+                                Resume
                               </DropdownMenuItem>
                             )}
                             {(job.status === 'completed' || job.status === 'failed' || job.status === 'cancelled') && (
@@ -820,7 +1089,7 @@ const Jobs: React.FC = () => {
                     </TableRow>
                     {selectedJobId === job.id && (
                       <TableRow>
-                        <TableCell colSpan={6} className="bg-muted/40">
+                        <TableCell colSpan={8} className="bg-muted/40">
                           {job.error_message && (
                             <div className="mb-4 rounded-lg border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">
                               <p className="font-semibold">Error:</p>
@@ -848,14 +1117,8 @@ const Jobs: React.FC = () => {
       <AlertDialog open={confirmJob !== null} onOpenChange={(open) => !open && setConfirmJob(null)}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>
-              {confirmJob?.kind === 'delete' ? 'Delete this job?' : 'Cancel this job?'}
-            </AlertDialogTitle>
-            <AlertDialogDescription>
-              {confirmJob?.kind === 'delete'
-                ? <>This permanently removes the job for <strong>{confirmJob.job.source_email}</strong> and its logs. This can't be undone.</>
-                : <>This stops the migration for <strong>{confirmJob?.job.source_email}</strong> as soon as possible. Already-transferred mail is not rolled back.</>}
-            </AlertDialogDescription>
+            <AlertDialogTitle>{confirmTitle}</AlertDialogTitle>
+            <AlertDialogDescription>{confirmDesc}</AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel disabled={actionPending}>Back</AlertDialogCancel>
@@ -865,9 +1128,9 @@ const Jobs: React.FC = () => {
                 handleConfirmAction()
               }}
               disabled={actionPending}
-              className={confirmJob?.kind === 'delete' ? 'bg-destructive text-destructive-foreground hover:bg-destructive/90' : undefined}
+              className={isDelete ? 'bg-destructive text-destructive-foreground hover:bg-destructive/90' : undefined}
             >
-              {actionPending ? 'Working...' : confirmJob?.kind === 'delete' ? 'Delete' : 'Cancel job'}
+              {actionPending ? 'Working...' : confirmLabel}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

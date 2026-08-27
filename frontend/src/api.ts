@@ -115,8 +115,22 @@ export const jobsApi = {
     api.put(`/jobs/${jobId}`, payload),
   cancelJob: (jobId: number) =>
     api.post(`/jobs/${jobId}/cancel`),
+  pauseJob: (jobId: number) =>
+    api.post(`/jobs/${jobId}/pause`),
+  resumeJob: (jobId: number) =>
+    api.post(`/jobs/${jobId}/resume`),
   deleteJob: (jobId: number) =>
     api.delete(`/jobs/${jobId}`),
+  bulkCancelJobs: (jobIds: number[]) =>
+    api.post('/jobs/bulk/cancel', { job_ids: jobIds }),
+  bulkPauseJobs: (jobIds: number[]) =>
+    api.post('/jobs/bulk/pause', { job_ids: jobIds }),
+  bulkResumeJobs: (jobIds: number[]) =>
+    api.post('/jobs/bulk/resume', { job_ids: jobIds }),
+  bulkRetryJobs: (jobIds: number[]) =>
+    api.post('/jobs/bulk/retry', { job_ids: jobIds }),
+  bulkDeleteJobs: (jobIds: number[]) =>
+    api.post('/jobs/bulk/delete', { job_ids: jobIds }),
   getJobReport: (jobId: number) =>
     api.get(`/jobs/${jobId}/report`),
   downloadJobReportCsv: (jobId: number) =>

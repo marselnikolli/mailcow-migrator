@@ -17,6 +17,11 @@ class Settings:
     # safe because imapsync is idempotent. Default 12h.
     JOB_LOCK_TIMEOUT: int = int(os.getenv("JOB_LOCK_TIMEOUT", "43200"))
 
+    # Worker concurrency: how many jobs a single worker process runs at once.
+    # imapsync runs as a subprocess and DAV sync is I/O-bound, so several jobs
+    # can share one worker process. Default 3.
+    MAX_CONCURRENT_JOBS: int = int(os.getenv("MAX_CONCURRENT_JOBS", "3"))
+
     # Application
     DEBUG: bool = os.getenv("DEBUG", "False").lower() == "true"
 

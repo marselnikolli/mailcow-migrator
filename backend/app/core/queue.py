@@ -8,6 +8,7 @@ class RedisQueue:
     def __init__(self, lock_timeout: int = 3600):
         self.redis_client = redis.from_url(settings.REDIS_URL)
         self.queue_key = "mailcow:jobs:queue"
+        self.scan_queue_key = "mailcow:jobs:scan"
         self.processing_key = "mailcow:jobs:processing"
         self.lock_timeout = lock_timeout
 
@@ -18,23 +19,31 @@ class RedisQueue:
         job_json = json.dumps(job)
         self.redis_client.lpush(self.queue_key, job_json)
         return job_id
-    
+
     def pop_job(self) -> Optional[Dict[str, Any]]:
-        """Pop job from queue with locking."""
-        # Pop from queue
+        """Pop a job from the queue (atomic RPOP)."""
         job_json = self.redis_client.rpop(self.queue_key)
         if not job_json:
             return None
-        
-        job = json.loads(job_json)
-        # Add to processing set with lock
-        job_id = job.get("job_id")
-        lock_key = f"mailcow:lock:{job_id}"
-        
-        # Set lock with configurable expiry
-        self.redis_client.setex(lock_key, self.lock_timeout, "1")
-        
-        return job
+        return json.loads(job_json)
+
+    def push_scan(self, job: Dict[str, Any]) -> str:
+        """Push a pre-migration scan task. Scans share the same payload shape
+        as migration jobs (so the scan executor can reuse the same fields)."""
+        job_id = str(uuid.uuid4())
+        job["job_id"] = job_id
+        self.redis_client.lpush(self.scan_queue_key, json.dumps(job))
+        return job_id
+
+    def pop_scan(self) -> Optional[Dict[str, Any]]:
+        """Pop a scan task from the scan queue (atomic RPOP)."""
+        job_json = self.redis_client.rpop(self.scan_queue_key)
+        if not job_json:
+            return None
+        return json.loads(job_json)
+
+    def get_scan_size(self) -> int:
+        return self.redis_client.llen(self.scan_queue_key)
     
     def acquire_job_lock(self, job_id: str, timeout: int = 3600) -> bool:
         """Try to acquire lock on job. Uses the instance lock_timeout when the
@@ -80,6 +89,18 @@ class RedisQueue:
 
     def clear_cancel(self, job_id: int) -> None:
         self.redis_client.delete(f"mailcow:cancel:{job_id}")
+
+    def request_pause(self, job_id: int) -> None:
+        """Flag a running job for a soft pause. The worker honors this at safe
+        boundaries (folder changes / DAV item boundaries) rather than freezing
+        the transfer mid-request."""
+        self.redis_client.setex(f"mailcow:pause:{job_id}", 3600, "1")
+
+    def is_pause_requested(self, job_id: int) -> bool:
+        return bool(self.redis_client.get(f"mailcow:pause:{job_id}"))
+
+    def clear_pause(self, job_id: int) -> None:
+        self.redis_client.delete(f"mailcow:pause:{job_id}")
     
     def set_job_log(self, job_id: str, log: str) -> None:
         """Store job log in Redis."""

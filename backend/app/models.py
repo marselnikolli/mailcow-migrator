@@ -7,6 +7,7 @@ from enum import Enum
 class JobStatus(str, Enum):
     PENDING = "pending"
     RUNNING = "running"
+    PAUSED = "paused"
     COMPLETED = "completed"
     FAILED = "failed"
     CANCELLED = "cancelled"
@@ -78,6 +79,18 @@ class Job(BaseModel):
     status: JobStatus = JobStatus.PENDING
     progress: int = 0
     error_message: Optional[str] = None
+    # Pre-flight scan state + itemized counts (see design: pre-migration scan)
+    scan_status: Optional[str] = "queued"
+    total_messages: Optional[int] = 0
+    copied_messages: Optional[int] = 0
+    total_calendar: Optional[int] = 0
+    calendar_copied: Optional[int] = 0
+    total_contacts: Optional[int] = 0
+    contacts_copied: Optional[int] = 0
+    total_tasks: Optional[int] = 0
+    tasks_copied: Optional[int] = 0
+    expected_total: Optional[int] = 0
+    eta_seconds: Optional[int] = None
     created_at: Optional[datetime] = None
     started_at: Optional[datetime] = None
     completed_at: Optional[datetime] = None
@@ -131,6 +144,10 @@ class JobCreate(BaseModel):
 class BulkJobCreate(BaseModel):
     jobs: List[JobCreate]
 
+class BulkJobAction(BaseModel):
+    """Body for bulk actions: a set of job ids to act on."""
+    job_ids: List[int]
+
 class JobUpdate(BaseModel):
     """Fields editable on a job while it's still pending (not yet picked up
     by a worker). Anything left as None is left unchanged."""
@@ -178,6 +195,17 @@ class JobResponse(BaseModel):
     error_message: Optional[str] = None
     created_at: datetime
     completed_at: Optional[datetime] = None
+    scan_status: Optional[str] = "queued"
+    total_messages: Optional[int] = 0
+    copied_messages: Optional[int] = 0
+    total_calendar: Optional[int] = 0
+    calendar_copied: Optional[int] = 0
+    total_contacts: Optional[int] = 0
+    contacts_copied: Optional[int] = 0
+    total_tasks: Optional[int] = 0
+    tasks_copied: Optional[int] = 0
+    expected_total: Optional[int] = 0
+    eta_seconds: Optional[int] = None
 
 class DomainCreate(BaseModel):
     domain: str
