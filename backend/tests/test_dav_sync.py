@@ -157,3 +157,105 @@ def test_estimate_does_not_network_when_not_requested(monkeypatch):
 
     monkeypatch.setattr(syncer.session, "request", never)
     assert syncer.estimate() == {"calendar": 0, "contacts": 0, "tasks": 0}
+
+
+SOURCE_HOME_PROPFIND_RESPONSE = """<?xml version="1.0"?>
+<D:multistatus xmlns:D="DAV:" xmlns:C="urn:ietf:params:xml:ns:carddav">
+  <D:response>
+    <D:href>/dav/user%40example.com/Contacts/</D:href>
+    <D:propstat><D:status>HTTP/1.1 200 OK</D:status><D:prop>
+      <D:resourcetype><D:collection/><C:addressbook/></D:resourcetype>
+    </D:prop></D:propstat>
+  </D:response>
+  <D:response>
+    <D:href>/dav/user%40example.com/Emailed Contacts/</D:href>
+    <D:propstat><D:status>HTTP/1.1 200 OK</D:status><D:prop>
+      <D:resourcetype><D:collection/><C:addressbook/></D:resourcetype>
+    </D:prop></D:propstat>
+  </D:response>
+  <D:response>
+    <D:href>/dav/user%40example.com/Calendar/</D:href>
+    <D:propstat><D:status>HTTP/1.1 200 OK</D:status><D:prop>
+      <D:resourcetype><D:collection/></D:resourcetype>
+    </D:prop></D:propstat>
+  </D:response>
+</D:multistatus>"""
+
+
+def make_vcard_report_response(uid: str) -> str:
+    return f"""<?xml version="1.0"?>
+<D:multistatus xmlns:D="DAV:" xmlns:C="urn:ietf:params:xml:ns:carddav">
+  <D:response>
+    <D:href>/dav/u/x/{uid}.vcf</D:href>
+    <D:propstat>
+      <D:status>HTTP/1.1 200 OK</D:status>
+      <D:prop>
+        <D:getetag>"etag-{uid}"</D:getetag>
+        <C:address-data>BEGIN:VCARD
+UID:{uid}
+FN:Test {uid}
+END:VCARD</C:address-data>
+      </D:prop>
+    </D:propstat>
+  </D:response>
+</D:multistatus>"""
+
+
+def test_sync_contacts_discovers_all_source_addressbooks(monkeypatch):
+    """Regression test: Zimbra/Carbonio keeps 'Emailed Contacts' (folder id 13)
+    as a sibling collection next to 'Contacts' (folder id 7), not inside it.
+    sync_contacts() must find and migrate both, not just the hardcoded
+    '/Contacts/' collection."""
+    syncer = make_syncer()
+    put_calls = []
+
+    class PropfindHomeResp:
+        status_code = 207
+        content = SOURCE_HOME_PROPFIND_RESPONSE.encode()
+
+    TARGET_HOME_PROPFIND_EMPTY = """<?xml version="1.0"?>
+<D:multistatus xmlns:D="DAV:">
+  <D:response>
+    <D:href>/SOGo/dav/user%40example.com/Contacts/</D:href>
+    <D:propstat><D:status>HTTP/1.1 200 OK</D:status><D:prop>
+      <D:resourcetype><D:collection/></D:resourcetype>
+    </D:prop></D:propstat>
+  </D:response>
+</D:multistatus>"""
+
+    class PropfindTargetResp:
+        status_code = 207
+        content = TARGET_HOME_PROPFIND_EMPTY.encode()
+
+    def fake_request(method, url, **kwargs):
+        if method == "PROPFIND" and url == syncer.source_home:
+            return PropfindHomeResp()
+        if method == "PROPFIND" and url == syncer.target_contacts:
+            return PropfindTargetResp()
+        if method == "REPORT" and "Contacts" in url and "Emailed" not in url:
+            class Resp:
+                status_code = 207
+                content = make_vcard_report_response("uid-contacts-1").encode()
+            return Resp()
+        if method == "REPORT" and "Emailed Contacts" in url:
+            class Resp:
+                status_code = 207
+                content = make_vcard_report_response("uid-emailed-1").encode()
+            return Resp()
+        raise AssertionError(f"unexpected request {method} {url}")
+
+    def fake_put(url, **kwargs):
+        put_calls.append(url)
+
+        class PutResp:
+            status_code = 201
+        return PutResp()
+
+    monkeypatch.setattr(syncer.session, "request", fake_request)
+    monkeypatch.setattr(syncer.session, "put", fake_put)
+
+    result = syncer.sync_contacts()
+
+    assert result == {"total": 2, "uploaded": 2}
+    assert any("uid-contacts-1" in c for c in put_calls)
+    assert any("uid-emailed-1" in c for c in put_calls)

@@ -93,6 +93,7 @@ class DavSyncer:
         user = quote(source_email, safe="")
         tuser = quote(target_email, safe="")
 
+        self.source_home = f"{src_scheme}://{source_host}{source_base}{user}/"
         self.source_calendar = urljoin(
             f"{src_scheme}://{source_host}{source_base}{user}/", "Calendar/"
         )
@@ -198,6 +199,27 @@ class DavSyncer:
                 else:
                     found.append(base_origin + "/" + href.lstrip("/"))
         return found
+
+    def _source_addressbook_urls(self) -> List[str]:
+        """Discover every address book collection under the source user's DAV
+        home, not just the one literally named 'Contacts'.
+
+        Zimbra/Carbonio exposes each contacts folder as its own sibling DAV
+        collection under the user home - e.g. the built-in 'Emailed Contacts'
+        folder (autocomplete addresses, typically folder id 13) lives next to
+        'Contacts' (folder id 7), not inside it. Syncing only the hardcoded
+        Contacts URL silently misses those. Falls back to the hardcoded
+        Contacts URL if the home can't be enumerated (e.g. older servers)."""
+        try:
+            addressbooks = self._find_writable_collections(
+                self.source_home, self.source_auth, "addressbook"
+            )
+        except DavSyncError as e:
+            self._log(f"Could not enumerate address books under {self.source_home}: {e}")
+            addressbooks = []
+        if not addressbooks:
+            addressbooks = [self.source_contacts]
+        return addressbooks
 
     @staticmethod
     def _calendar_query_body() -> str:
@@ -344,13 +366,24 @@ class DavSyncer:
         return {"total": len(items), "uploaded": uploaded}
 
     def sync_contacts(self) -> dict:
-        """Migrate the address book collection. Returns {total, uploaded}."""
-        self._log(f"CardDAV source: {self.source_contacts}")
+        """Migrate every address book collection on the source (not just the
+        one named 'Contacts'). Returns {total, uploaded}."""
         target = self._resolve_target(self.target_contacts, self.target_auth, "addressbook", "personal")
         self._log(f"CardDAV target: {target}")
-        items = self._report_items(self.source_contacts, self.source_auth,
-                                   self._addressbook_query_body())
-        self._log(f"Found {len(items)} contacts on source")
+
+        addressbooks = self._source_addressbook_urls()
+        self._log(f"CardDAV source address books: {', '.join(addressbooks)}")
+
+        items = []
+        for source in addressbooks:
+            try:
+                found = self._report_items(source, self.source_auth,
+                                           self._addressbook_query_body())
+            except DavSyncError as e:
+                self._log(f"Skipping address book {source}: {e}")
+                continue
+            self._log(f"Found {len(found)} contacts in {source}")
+            items.extend(found)
 
         uploaded = 0
         for item in items:
@@ -394,13 +427,16 @@ class DavSyncer:
         else:
             results["tasks"] = 0
         if sync_contacts:
-            try:
-                items = self._report_items(self.source_contacts, self.source_auth,
-                                           self._addressbook_query_body())
-            except DavSyncError as e:
-                self._log(f"Contacts estimate failed: {e}")
-                items = []
-            results["contacts"] = len(items)
+            total = 0
+            for source in self._source_addressbook_urls():
+                try:
+                    items = self._report_items(source, self.source_auth,
+                                               self._addressbook_query_body())
+                except DavSyncError as e:
+                    self._log(f"Contacts estimate failed for {source}: {e}")
+                    items = []
+                total += len(items)
+            results["contacts"] = total
         else:
             results["contacts"] = 0
         return results
@@ -428,11 +464,19 @@ class DavSyncer:
                     self._log("[DRY RUN] No tasks collection on source")
                 results["tasks"] = {"total": len(items), "uploaded": 0}
             if sync_contacts:
-                self._log(f"[DRY RUN] CardDAV source: {self.source_contacts}")
-                items = self._report_items(self.source_contacts, self.source_auth,
-                                           self._addressbook_query_body())
-                self._log(f"[DRY RUN] Would upload {len(items)} contacts")
-                results["contacts"] = {"total": len(items), "uploaded": 0}
+                addressbooks = self._source_addressbook_urls()
+                self._log(f"[DRY RUN] CardDAV source address books: {', '.join(addressbooks)}")
+                total = 0
+                for source in addressbooks:
+                    try:
+                        items = self._report_items(source, self.source_auth,
+                                                   self._addressbook_query_body())
+                    except DavSyncError as e:
+                        self._log(f"[DRY RUN] Skipping address book {source}: {e}")
+                        items = []
+                    total += len(items)
+                self._log(f"[DRY RUN] Would upload {total} contacts")
+                results["contacts"] = {"total": total, "uploaded": 0}
             return results
 
         if sync_calendar:
